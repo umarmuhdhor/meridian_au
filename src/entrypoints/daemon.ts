@@ -1,3 +1,8 @@
+// MUST stay the first import — ESM evaluates imported modules in order and all of
+// them before this module's own statements, so a bare `config()` call placed here
+// would run too late. See load-env.ts for why this is a no-op in production.
+import "./load-env.js";
+
 import path from "node:path";
 import { fixedClock, systemClock } from "../ports/clock.js";
 import { createConsoleLogger } from "../adapters/logger/console.js";

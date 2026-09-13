@@ -33,6 +33,34 @@ async function isAuthed(req: NextRequest): Promise<boolean> {
   }
 }
 
+/**
+ * Point an absolute redirect url at the hostname the visitor actually asked for.
+ *
+ * Next derives `req.nextUrl`'s origin from the server's own bind address (and
+ * normalises 127.0.0.1 -> localhost), NOT from the request headers — so behind
+ * any reverse proxy `NextResponse.redirect(req.nextUrl)` emits
+ * `https://localhost:3000/login` and bounces the visitor to *their* machine.
+ * A relative Location would sidestep all of this, but Next's middleware adapter
+ * parses Location as an absolute url and throws ERR_INVALID_URL on a path.
+ *
+ * `Host` is set by the edge (cloudflared and Caddy both pass the requested
+ * hostname through), so it is preferred; `x-forwarded-host` is the fallback for
+ * proxies that rewrite Host instead. Both only ever redirect a visitor to the
+ * host they themselves supplied, so a forged value harms nobody else.
+ */
+function applyPublicOrigin(url: URL, req: NextRequest): void {
+  const raw = req.headers.get("host") ?? req.headers.get("x-forwarded-host");
+  const host = raw?.split(",")[0]?.trim();
+  if (!host) return;
+  // Split host:port on the LAST colon, but never inside a bracketed IPv6 literal.
+  const colon = host.lastIndexOf(":");
+  const hasPort = colon > host.lastIndexOf("]");
+  url.hostname = hasPort ? host.slice(0, colon) : host;
+  url.port = hasPort ? host.slice(colon + 1) : "";
+  const proto = req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  if (proto === "http" || proto === "https") url.protocol = `${proto}:`;
+}
+
 export async function middleware(req: NextRequest): Promise<NextResponse> {
   const { pathname } = req.nextUrl;
 
@@ -51,6 +79,7 @@ export async function middleware(req: NextRequest): Promise<NextResponse> {
   const url = req.nextUrl.clone();
   url.pathname = "/login";
   url.searchParams.set("next", pathname);
+  applyPublicOrigin(url, req);
   return NextResponse.redirect(url);
 }
 

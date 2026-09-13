@@ -58,9 +58,16 @@ itu `@meteora-ag/dlmm` gagal di-load (anchor ESM directory-import + export `BN`)
 ```powershell
 copy deploy\homeserver\env.daemon.sample .env
 copy user-config.example.json user-config.json
-mkdir data
 node scripts/setup-local-secrets.mjs
 ```
+
+State (`state.json`, `lessons.json`, `decision-log.json`, …) tinggal di **root
+repo**, bukan subfolder — semuanya sudah di-gitignore. Ini bukan selera:
+daemon membaca `user-config.json` dari cwd (hardcoded), sedangkan dashboard
+membaca seluruh file whitelist — `user-config.json` termasuk — dari satu folder
+`MERIDIAN_ROOT`. Pisahkan keduanya dan halaman Config tampil **kosong tanpa
+error**. Jadi `MERIDIAN_STATE_DIR` (daemon) dan `MERIDIAN_ROOT` (web) harus
+sama-sama menunjuk root repo.
 
 Script terakhir menanyakan PIN 6 digit (tidak di-echo), lalu menulis:
 
@@ -205,6 +212,34 @@ Setelah hosting terverifikasi:
 Di log boot harus terbaca `chain: meteora` + `market: real`. Kalau muncul
 `wallet: X SOL ($150)` / `market: fake` → `MERIDIAN_CHAIN` belum terbaca.
 
+### Decider: Sage TIDAK diperlukan di sini
+
+Keputusan "masuk pool yang mana" butuh LLM. Ada dua implementasi; yang berlaku
+ditentukan `daemon.ts`:
+
+```ts
+const sageEnabled = process.env.MERIDIAN_DECIDER !== "loop"
+  && !!process.env.SAGE_BASE_URL && !!process.env.SAGE_API_KEY;
+```
+
+Sage baru aktif kalau `SAGE_BASE_URL` **dan** `SAGE_API_KEY` dua-duanya terisi.
+Di homeserver ini keduanya kosong, jadi daemon otomatis memakai ReAct loop lokal
+lewat `OPENROUTER_API_KEY` — tidak perlu setting apa pun. **Jangan** menambahkan
+variabel `SAGE_*` dan jangan set `MERIDIAN_DECIDER`; `docker-compose.yml` memang
+memasang `MERIDIAN_DECIDER=sage`, tapi itu khusus vivobook yang memang
+menjalankan Hermes/Sage di host yang sama.
+
+Jadi satu-satunya kunci LLM yang dibutuhkan di sini adalah OpenRouter.
+`RPC_URL` dan `WALLET_PRIVATE_KEY` bukan LLM — itu untuk membaca chain dan
+menandatangani transaksi.
+
+### Ambang saldo
+
+Screening akan **skip** (dan menulis decision `skip`) selama
+`wallet.sol < deployAmountSol + gasReserve`. Dengan default homeserver
+(`0.05 + 0.2`) wallet harus berisi minimal **0.25 SOL** sebelum siklus pertama
+bisa deploy.
+
 ## 7. Operasi harian
 
 ```powershell
@@ -236,6 +271,7 @@ pm2 restart all
 | Halaman PIN loop terus | `MERIDIAN_SESSION_SECRET` beda antara `.env` dan `.env.local`, atau < 32 char. Jalankan ulang `setup-local-secrets.mjs`. |
 | PIN selalu ditolak | `MERIDIAN_DASHBOARD_PIN_HASH` tidak terbaca Next. Pastikan ada di `dashboard/web/.env.local` dan **tanpa tanda kutip**. |
 | Dashboard 500 / positions kosong | `BRIDGE_TOKEN` ≠ `DASHBOARD_TOKEN`, atau daemon mati. |
+| Halaman Config / Feed kosong, tanpa pesan error | `MERIDIAN_ROOT` (web) ≠ `MERIDIAN_STATE_DIR` (daemon), atau salah satunya bukan root repo. `/api/files/:name` mengembalikan `{}` untuk file yang tidak ada — sengaja, supaya halaman tetap render. Samakan keduanya ke root repo. |
 | `bridge not started` di log | `DASHBOARD_TOKEN` kosong di `.env`. |
 | Daemon crash `Directory import … @coral-xyz/anchor` | `scripts/patch-anchor.js` tidak jalan. `npm rebuild` / `npm install` ulang. |
 | Semua mati setelah reboot | Task Scheduler `meridian-pm2-resurrect` belum dibuat, atau `pm2 save` belum dijalankan setelah perubahan terakhir. |

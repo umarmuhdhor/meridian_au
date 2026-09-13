@@ -127,7 +127,11 @@ upsertEnv(ENV_DAEMON, {
 upsertEnv(ENV_WEB, {
   BRIDGE_URL: "http://127.0.0.1:8787",
   BRIDGE_TOKEN: bridgeToken,
-  MERIDIAN_ROOT: path.join(REPO_ROOT, "data").replace(/\\/g, "/"),
+  // Must equal the daemon's MERIDIAN_STATE_DIR, and that must be the repo root:
+  // the daemon reads user-config.json from cwd, while the dashboard reads every
+  // whitelisted file (user-config included) from this one directory. Point them
+  // at different folders and the Config page silently renders empty.
+  MERIDIAN_ROOT: REPO_ROOT.replace(/\\/g, "/"),
   MERIDIAN_SESSION_SECRET: sessionSecret,
   MERIDIAN_DASHBOARD_PIN_HASH: pinHash,
 });

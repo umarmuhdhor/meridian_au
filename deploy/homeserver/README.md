@@ -121,6 +121,31 @@ powercfg /change standby-timeout-ac 0
 powercfg /change hibernate-timeout-ac 0
 ```
 
+### Mengisi Feed secara massal
+
+Dashboard menambah lesson satu modal per aturan. Untuk seed awal, pakai seeder:
+
+```powershell
+copy deploy\homeserver\feed-seed.json deploy\homeserver\feed-seed.local.json
+# edit feed-seed.local.json
+node scripts/seed-feed.mjs deploy/homeserver/feed-seed.local.json --dry-run
+node scripts/seed-feed.mjs deploy/homeserver/feed-seed.local.json
+```
+
+**Pakai `feed-seed.local.json`, bukan `feed-seed.json`.** Repo ini publik dan
+lesson memuat edge dagang — threshold veto, aturan sizing, nama token, angka
+P&L. File `.local.json` sudah di-gitignore; `feed-seed.json` yang ter-commit
+hanya template generik.
+
+Tidak perlu restart: repo lesson membaca filenya tiap siklus. Seeder idempoten
+(lesson dengan teks sama dilewati) dan tidak menyentuh array `performance` yang
+berbagi file yang sama.
+
+**Batas yang mengikat:** prompt hanya memuat **5 pinned pertama + 5 non-pinned
+terakhir**, dari jendela `listLessons({limit:20})` — lihat
+`summarizeLessons` di `src/domain/prompt/builder.ts`. Menyimpan 21 lesson
+tidak berarti 21 terbaca. Urutan dalam file menentukan siapa yang lolos.
+
 ## 4. Cloudflare Tunnel
 
 > ⚠️ `alieffauzan.com` punya record **wildcard `*`** yang mengarah ke Vercel.

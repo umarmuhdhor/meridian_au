@@ -55,3 +55,6 @@ dist/
 # Vitest coverage
 coverage/
 
+
+# Feed seed berisi lesson/strategi milik operator (edge dagang). Repo ini publik.
+deploy/homeserver/feed-seed.local.json

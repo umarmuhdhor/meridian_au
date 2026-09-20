@@ -206,6 +206,42 @@ export interface SmartWalletsFile {
   wallets?: SmartWallet[];
 }
 
+// ── Static file: follow-state.json ──────────────────────────────────
+export interface FollowedWallet {
+  address: string;
+  label?: string;
+  enabled?: boolean;
+  addedAt?: string;
+  /** Fraction of free SOL per mirror, overriding follow.positionSizePct. Null = use the global value. */
+  sizePctOverride?: number | null;
+  notes?: string | null;
+}
+
+export interface MirroredPosition {
+  position: string;
+  pool: string;
+  pool_name?: string | null;
+  base_mint?: string | null;
+  source_wallet: string;
+  source_label?: string;
+  source_position?: string | null;
+  opened_at: string;
+  closed_at?: string | null;
+  close_reason?: string | null;
+  amount_sol?: number | null;
+  lower_bin?: number | null;
+  upper_bin?: number | null;
+  source_lower_bin?: number | null;
+  source_upper_bin?: number | null;
+  source_pnl_pct?: number | null;
+  lesson_id?: string | null;
+}
+
+export interface FollowStateFile {
+  wallets?: FollowedWallet[];
+  mirrored?: MirroredPosition[];
+}
+
 // ── Static file: signal-weights.json ────────────────────────────────
 export interface SignalWeightsFile {
   weights?: Record<string, number>;

@@ -154,6 +154,16 @@ export const FollowConfigSchema = z.object({
   /** Used when datapi does not expose their lower bin. */
   fallbackBinsBelow: z.number().int().min(1).max(400).default(55),
   strategy: z.enum(["spot", "curve", "bid_ask"]).default("spot"),
+  /**
+   * The followed wallet owns the exit. When true, mirrored positions are exempt from
+   * EVERY local close rule — stop-loss, take-profit, trailing-TP, OOR, low-yield and
+   * the smart-exit engine — so only the source wallet's exit closes them. Fee CLAIMS
+   * still run. Turning this off hands mirrored positions back to the normal exit rules,
+   * which will close them independently of the wallet being followed.
+   */
+  exclusiveExit: z.boolean().default(true),
+  /** Consecutive degraded snapshots for one wallet before an alert is raised. */
+  staleTicksBeforeAlert: z.number().int().min(1).default(5),
   /** Run the entry/exit retrospective and write a lesson after each mirrored close. */
   learnEnabled: z.boolean().default(true),
 });

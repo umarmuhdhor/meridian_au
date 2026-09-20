@@ -5,6 +5,7 @@ import type { SwapClient } from "../../ports/swap-client.js";
 import type { Notifier } from "../../ports/notifier.js";
 import type { Scheduler } from "../../ports/scheduler.js";
 import type { PositionRepo } from "../../ports/position-repo.js";
+import type { FollowRepo } from "../../ports/follow-repo.js";
 import type { ManagementConfig } from "../../domain/schemas/config.js";
 import type { OnChainPosition, PositionsSnapshot } from "../../domain/schemas/chain.js";
 import { assessPnl } from "../../domain/rules/pnl.js";
@@ -145,6 +146,12 @@ export interface PnlPollerDeps {
   scheduler: Scheduler;
   positionRepo: PositionRepo;
   config: ManagementConfig;
+  /**
+   * When present, positions held by an open follow mirror are removed from the tick
+   * entirely — no trailing-TP queue, no smart-exit fast-cut. The followed wallet owns
+   * the exit (`follow.exclusiveExit`). Absent = the poller behaves exactly as before.
+   */
+  followRepo?: FollowRepo;
   pollIntervalMs?: number;
   confirmDelayMs?: number;
   confirmTolerancePct?: number;
@@ -182,11 +189,22 @@ export function createPnlPoller(deps: PnlPollerDeps): PnlPollerHandle {
     busy = true;
     try {
       const snap = await deps.chain.getMyPositions({ force: true });
+      // Drop follow-mirrored positions before any exit logic runs. Filtering here
+      // rather than inside `tickPnlPoller` keeps the pure function unaware of the
+      // feature, and covers BOTH paths it owns (trailing-TP and the fast-cut).
+      const followHeld = deps.followRepo
+        ? new Set((await deps.followRepo.listOpenMirrored()).map((m) => m.position))
+        : new Set<string>();
+      const eligible =
+        followHeld.size > 0
+          ? snap.positions.filter((p) => !followHeld.has(p.position))
+          : snap.positions;
       // Merge peak_pnl_pct from the persisted state into the live snapshot in-place.
       const withPeak: PositionsSnapshot = {
         ...snap,
+        total_positions: eligible.length,
         positions: await Promise.all(
-          snap.positions.map(async (p) => {
+          eligible.map(async (p) => {
             const tracked = await deps.positionRepo.get(p.position);
             return {
               ...p,

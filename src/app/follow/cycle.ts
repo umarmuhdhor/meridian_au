@@ -18,6 +18,11 @@ export interface FollowCycleDeps {
   /** Optional — enables the post-close retrospective. */
   llm?: LLMClient | undefined;
   model?: string | undefined;
+  /**
+   * Consecutive degraded-snapshot count per wallet, owned by the caller so it survives
+   * across ticks. Absent → the stale-snapshot alert is skipped.
+   */
+  staleCounters?: Map<string, number>;
 }
 
 export interface FollowWatcherDeps extends FollowCycleDeps {
@@ -37,6 +42,8 @@ export interface FollowCycleResult {
   opened: number;
   closed: number;
   failures: number;
+  /** Mirror records finalised because their position was already gone on-chain. */
+  reconciled: number;
 }
 
 const short = (s: string): string => `${s.slice(0, 8)}…`;
@@ -75,6 +82,7 @@ export async function runFollowCycle(deps: FollowCycleDeps): Promise<FollowCycle
     opened: 0,
     closed: 0,
     failures: 0,
+    reconciled: 0,
   };
 
   if (!ctx.config.follow.enabled) return { ...result, kind: "disabled" };
@@ -85,14 +93,36 @@ export async function runFollowCycle(deps: FollowCycleDeps): Promise<FollowCycle
   // One fresh on-chain read per tick, shared across wallets — `force` so the 5-min
   // positions cache cannot hide a position we opened on the previous tick.
   let ourPools: string[] = [];
+  let ourPositionIds = new Set<string>();
   try {
     const snap = await ctx.chain.getMyPositions({ force: true, silent: true });
     ourPools = snap.positions.map((p) => p.pool);
+    ourPositionIds = new Set(snap.positions.map((p) => p.position));
   } catch (e) {
     ctx.logger.warn("follow", "could not read our positions — skipping tick", {
       error: e instanceof Error ? e.message : String(e),
     });
     return { ...result, failures: 1 };
+  }
+
+  // Reverse reconcile — mirrors the management cycle's ghost-open sweep.
+  // A mirror whose position is no longer on-chain (closed manually, from the Meteora
+  // UI, or by any path outside this cycle) must be finalised here. Left open it would
+  // (a) make `close_position` throw "pool for position … not found in snapshot" when
+  // the source wallet eventually exits, and (b) keep matching the `already_mirrored`
+  // guard forever, permanently blocking that pool from being mirrored again.
+  const nowIso = ctx.clock.now().toISOString();
+  for (const m of await repo.listOpenMirrored()) {
+    if (ourPositionIds.has(m.position)) continue;
+    await repo.updateMirrored(m.position, {
+      closed_at: nowIso,
+      close_reason: "reconciled: position no longer on-chain (closed outside the follow cycle)",
+    });
+    result.reconciled++;
+    ctx.logger.info(
+      "follow",
+      `reconciled orphaned mirror ${short(m.position)} in ${m.pool_name ?? short(m.pool)} as closed`,
+    );
   }
 
   for (const wallet of wallets) {
@@ -124,6 +154,28 @@ export async function runFollowCycle(deps: FollowCycleDeps): Promise<FollowCycle
         "follow",
         `snapshot for ${wallet.label || short(wallet.address)} incomplete — close detection suppressed this tick`,
       );
+      // Suppressing closes is safe against a FALSE exit but not against a MISSED one:
+      // while datapi stays degraded the source wallet can leave a pool and we would
+      // never mirror it. That matters most under `follow.exclusiveExit`, where these
+      // positions have no local stop either — so a sustained outage is escalated to
+      // the operator rather than left in the log.
+      if (deps.staleCounters) {
+        const n = (deps.staleCounters.get(wallet.address) ?? 0) + 1;
+        deps.staleCounters.set(wallet.address, n);
+        const threshold = ctx.config.follow.staleTicksBeforeAlert;
+        if (n === threshold || (n > threshold && n % threshold === 0)) {
+          const held = openMirrors.length;
+          await ctx.notifier.notify(
+            "warn",
+            `follow: cannot read ${wallet.label || short(wallet.address)} — ${n} degraded polls in a row. ` +
+              `${held} mirrored position(s) will NOT be closed on their exit until this clears` +
+              (ctx.config.follow.exclusiveExit ? " (local exit rules are off for these)." : "."),
+          );
+        }
+      }
+    } else if (deps.staleCounters?.get(wallet.address)) {
+      deps.staleCounters.delete(wallet.address);
+      ctx.logger.info("follow", `snapshot for ${wallet.label || short(wallet.address)} recovered`);
     }
     for (const skip of diff.skipped) {
       ctx.logger.info("follow", `skip ${short(skip.pool)} — ${skip.reason}`);
@@ -421,18 +473,20 @@ async function mirrorClose(
  */
 export function createFollowWatcher(deps: FollowWatcherDeps): FollowWatcherHandle {
   const intervalMs = deps.intervalMs ?? deps.ctx.config.follow.intervalSec * 1000;
+  // Lives for the process, not the tick — the alert needs a run of consecutive failures.
+  const staleCounters = new Map<string, number>();
   let busy = false;
 
   const tick = async (): Promise<FollowCycleResult> => {
-    if (busy) return { kind: "ran", seeded: [], opened: 0, closed: 0, failures: 0 };
+    if (busy) return { kind: "ran", seeded: [], opened: 0, closed: 0, failures: 0, reconciled: 0 };
     busy = true;
     try {
-      return await runFollowCycle(deps);
+      return await runFollowCycle({ ...deps, staleCounters });
     } catch (e) {
       deps.ctx.logger.warn("follow", "cycle threw", {
         error: e instanceof Error ? e.message : String(e),
       });
-      return { kind: "ran", seeded: [], opened: 0, closed: 0, failures: 1 };
+      return { kind: "ran", seeded: [], opened: 0, closed: 0, failures: 1, reconciled: 0 };
     } finally {
       busy = false;
     }

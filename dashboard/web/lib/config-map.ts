@@ -146,6 +146,8 @@ export const CONFIG_FIELDS: ConfigField[] = [
   f("followMaxBinsBelow", "number", "follow", { unit: "bins", help: "Ceiling on the copied range width. Above 69 bins the deploy uses the multi-tx wide-range path." }),
   f("followFallbackBinsBelow", "number", "follow", { unit: "bins", help: "Width used when datapi does not expose their lower bin. 55 = same default the screener uses." }),
   f("followStrategy", "string", "follow", { options: ["spot", "curve", "bid_ask"], help: "Liquidity shape for mirrored entries. Their shape is not reported by datapi, so this is yours to pick." }),
+  f("followExclusiveExit", "boolean", "follow", { help: "THE FOLLOWED WALLET OWNS THE EXIT. true = mirrored positions are exempt from every local close rule (stop-loss, take-profit, trailing-TP, out-of-range, low-yield, smart-exit) and close ONLY when the source wallet leaves the pool. Fee claims still run. WARNING: with this on a mirrored position has no local downside protection — if the source wallet goes quiet or datapi stays unreachable, nothing will close it. false = the normal exit rules apply and may close a mirror while the source wallet is still holding." }),
+  f("followStaleTicksBeforeAlert", "number", "follow", { unit: "ticks", help: "Consecutive failed polls of one wallet before a Telegram alert. Matters most with followExclusiveExit on: while polling is degraded, exits are not mirrored and those positions have no local stop. 5 ticks at 45s ≈ 4 minutes." }),
   f("followLearnEnabled", "boolean", "follow", { help: "After each mirrored close, ask the LLM to infer why the wallet entered and exited, and save it as a tagged lesson. Entry/exit technicals are recorded either way." }),
 
   // ── integrations ──

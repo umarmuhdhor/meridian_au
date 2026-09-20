@@ -41,6 +41,8 @@ const cfg = {
     maxBinsBelow: 120,
     fallbackBinsBelow: 55,
     strategy: "spot",
+    exclusiveExit: true,
+    staleTicksBeforeAlert: 5,
     learnEnabled: true,
   },
 } as unknown as AppConfig;

@@ -377,6 +377,34 @@ export async function runManagementCycle(deps: ManagementCycleDeps): Promise<Man
     planForPosition(p, ctx, techByPos.get(p.position)),
   );
 
+  // Follow-the-wallet positions are exempt from every LOCAL exit rule when
+  // `follow.exclusiveExit` is on: the followed wallet owns the exit, and the follow
+  // cycle closes these the moment that wallet leaves the pool. Without this, two
+  // authorities race the same position — our stop-loss could close a mirror at -15%
+  // while the wallet being copied is still holding, which is precisely what
+  // copy-trading is supposed to avoid.
+  //
+  // CLAIM is deliberately left alone: collecting fees does not end the position.
+  // Optional-chained: a caller may hand us a config/context assembled before this
+  // feature existed, and management must keep working rather than throw on a missing key.
+  if (ctx.config.follow?.exclusiveExit && ctx.repos.follow) {
+    const followHeld = new Set(
+      (await ctx.repos.follow.listOpenMirrored()).map((m) => m.position),
+    );
+    if (followHeld.size > 0) {
+      for (const plan of plans) {
+        if (!followHeld.has(plan.position.position)) continue;
+        if (plan.action !== "CLOSE" && plan.action !== "ESCALATE") continue;
+        ctx.logger.info(
+          "management",
+          `follow position ${plan.position.position.slice(0, 8)}… exempt from ${plan.action} (${plan.reason}) — the followed wallet owns the exit`,
+        );
+        plan.action = "STAY";
+        plan.reason = `follow: exit deferred to the source wallet (local rule was: ${plan.reason})`;
+      }
+    }
+  }
+
   // Shadow observability: log the classified regime for EVERY position each tick,
   // whether or not smartExitEnabled acts on it. Lets the operator watch the engine
   // during the dark-launch period before arming.

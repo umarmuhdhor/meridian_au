@@ -437,11 +437,26 @@ both be on: `follow.enabled` (global) and `enabled` on the individual wallet.
 SDK: `GET /portfolio/open?user=<w>` for the pool set, `GET /positions/<pool>/pnl?user=<w>`
 for bin range + deposit + PnL.
 
-**The cycle** (`src/app/follow/cycle.ts`) per enabled wallet:
-1. snapshot their open pools → `diffFollowedWallet` (`domain/rules/follow-diff.ts`, pure).
-2. **closes run before opens** so an intra-tick rotation frees its `maxPositions` slot first.
-3. mirror-open → `follow_deploy_position` via `executeTool`; mirror-close → `close_position`.
-4. advance the per-wallet `seen` baseline.
+**The cycle** (`src/app/follow/cycle.ts`):
+1. **Reverse reconcile** (mirrors management's ghost-open sweep): any open mirror whose
+   position is gone on-chain is finalised. Without it, `close_position` would later throw
+   "pool for position … not found in snapshot" AND the stale record would keep matching
+   the `already_mirrored` guard, blocking that pool from ever being mirrored again.
+2. Per enabled wallet: snapshot their open pools → `diffFollowedWallet`
+   (`domain/rules/follow-diff.ts`, pure).
+3. **Closes run before opens** so an intra-tick rotation frees its `maxPositions` slot first.
+4. mirror-open → `follow_deploy_position` via `executeTool`; mirror-close → `close_position`.
+5. advance the per-wallet `seen` baseline.
+
+**`follow.exclusiveExit` (default TRUE) — the followed wallet owns the exit.** Mirrored
+positions are exempt from EVERY local close rule: the management cycle forces their
+CLOSE/ESCALATE plans to STAY (`management/cycle.ts`), and the pnl-poller filters them out
+of the snapshot before trailing-TP and the smart-exit fast-cut run (`pnl-poller.ts`, gated
+on the optional `followRepo` dep, so behaviour is unchanged when it is absent). CLAIM is
+deliberately untouched — collecting fees does not end a position. **This means a mirrored
+position has no local downside protection**: if the source wallet goes quiet or datapi
+stays unreachable, nothing closes it. That is why the stale-snapshot alert exists. Set the
+flag false to hand mirrors back to the normal exit rules.
 
 **Three asymmetries carry the safety of this feature** — change them and you get either
 mass-mirroring or mass-closing:
@@ -451,8 +466,14 @@ mass-mirroring or mass-closing:
   list can hide a still-open pool; reading that as an exit would close everything on a
   transient datapi 502. It cannot invent a pool, so a newly seen pool is always genuine.
   A degraded snapshot also never becomes the baseline.
-- **A failed mirror is NOT retried.** The baseline advances regardless, matching
-  `deploy_position`'s `noRetry` rationale. Failures are logged and pushed to Telegram.
+- **A failed mirror-OPEN is NOT retried** (the baseline advances regardless, matching
+  `deploy_position`'s `noRetry` rationale), but a failed mirror-CLOSE **is** — the record
+  stays open and the source wallet is still absent from the pool, so the next tick tries
+  again. Retrying a deploy risks a double-spend; retrying a close does not.
+- **Sustained degradation escalates.** Consecutive unreliable polls per wallet are counted
+  in-process; at `follow.staleTicksBeforeAlert` a Telegram warning names how many mirrors
+  are currently unprotected. Suppressing closes is safe against a FALSE exit but not a
+  MISSED one, and under `exclusiveExit` those positions have no local stop either.
 
 **Gates** — `follow_deploy_position` is a separate tool from `deploy_position` precisely
 so the gate list can differ: dropped = pool cooldown, base-mint cooldown, token blacklist,

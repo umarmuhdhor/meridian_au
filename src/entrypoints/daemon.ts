@@ -596,6 +596,10 @@ async function main(): Promise<void> {
       scheduler,
       positionRepo: ctx.repos.positions,
       config: ctx.config.management,
+      // Follow mirrors are exempt from trailing-TP and the fast-cut — the followed
+      // wallet owns the exit. Passing the repo only when the rule is armed keeps the
+      // poller's behaviour byte-identical when the feature is off.
+      ...(ctx.config.follow.exclusiveExit ? { followRepo: ctx.repos.follow } : {}),
     });
     console.log("  pnl-poller: 30s trailing-TP + 15s two-phase confirm");
 

@@ -143,6 +143,8 @@ export const FlatUserConfigSchema = z
     followMaxBinsBelow: z.number().int().min(1).max(400).default(120),
     followFallbackBinsBelow: z.number().int().min(1).max(400).default(55),
     followStrategy: z.enum(["spot", "curve", "bid_ask"]).default("spot"),
+    followExclusiveExit: z.boolean().default(true),
+    followStaleTicksBeforeAlert: z.number().int().min(1).default(5),
     followLearnEnabled: z.boolean().default(true),
 
     // llm

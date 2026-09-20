@@ -79,5 +79,7 @@
   "followMaxBinsBelow": 120,
   "followFallbackBinsBelow": 55,
   "followStrategy": "spot",
-  "followLearnEnabled": true
+  "followLearnEnabled": true,
+  "followExclusiveExit": true,
+  "followStaleTicksBeforeAlert": 5
 }

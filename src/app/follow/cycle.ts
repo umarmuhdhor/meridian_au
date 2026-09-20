@@ -66,6 +66,21 @@ export interface FollowCycleResult {
 const short = (s: string): string => `${s.slice(0, 8)}…`;
 
 /**
+ * Remove exactly ONE occurrence of `pool` from `pools`, not every occurrence.
+ *
+ * `ourPools` carries one entry per real on-chain position, so the same pool address can
+ * appear more than once (e.g. a screener position and a mirror sitting in the same pool).
+ * A plain `.filter(p => p !== pool)` after closing one of them would drop every entry for
+ * that pool, undercounting `ourOpenCount` for the rest of the tick and letting follow open
+ * past `risk.maxPositions`.
+ */
+function dropOnePool(pools: readonly string[], pool: string): string[] {
+  const idx = pools.indexOf(pool);
+  if (idx === -1) return [...pools];
+  return [...pools.slice(0, idx), ...pools.slice(idx + 1)];
+}
+
+/**
  * How long a mirror record is protected from the reverse-reconcile sweep.
  *
  * A deploy returns its position address before the RPC we read from is guaranteed to
@@ -320,7 +335,7 @@ export async function runFollowCycle(deps: FollowCycleDeps): Promise<FollowCycle
         if (ok) {
           result.recentered++;
           openMirrorCount--;
-          ourPools = ourPools.filter((p) => p !== m.pool);
+          ourPools = dropOnePool(ourPools, m.pool);
           // Drop the pool from the baseline so the NEXT tick reads it as a fresh entry
           // and re-mirrors at their new range. Re-opening in this same tick would race
           // the just-closed position still showing in the on-chain snapshot.
@@ -336,7 +351,7 @@ export async function runFollowCycle(deps: FollowCycleDeps): Promise<FollowCycle
       if (ok) {
         result.closed++;
         openMirrorCount--;
-        ourPools = ourPools.filter((p) => p !== mirror.pool);
+        ourPools = dropOnePool(ourPools, mirror.pool);
       } else {
         result.failures++;
       }

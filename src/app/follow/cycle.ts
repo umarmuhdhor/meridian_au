@@ -49,6 +49,18 @@ export interface FollowCycleResult {
 const short = (s: string): string => `${s.slice(0, 8)}…`;
 
 /**
+ * How long a mirror record is protected from the reverse-reconcile sweep.
+ *
+ * A deploy returns its position address before the RPC we read from is guaranteed to
+ * serve it. Without this window the very next tick could see a freshly opened mirror
+ * missing from `getMyPositions`, finalise the record, and orphan a position that is
+ * genuinely open on-chain — which under `follow.exclusiveExit` nothing else would ever
+ * close. Generous on purpose: the sweep exists to clean up records whose positions
+ * closed minutes-to-hours ago, so nothing is lost by waiting.
+ */
+export const RECONCILE_GRACE_MS = 3 * 60_000;
+
+/**
  * Pick the position to mirror when a wallet holds several in one pool: the widest
  * range, which is the one carrying the most of their exposure. Ties keep the first.
  */
@@ -111,9 +123,20 @@ export async function runFollowCycle(deps: FollowCycleDeps): Promise<FollowCycle
   // (a) make `close_position` throw "pool for position … not found in snapshot" when
   // the source wallet eventually exits, and (b) keep matching the `already_mirrored`
   // guard forever, permanently blocking that pool from being mirrored again.
+  const nowMs = ctx.clock.now().getTime();
   const nowIso = ctx.clock.now().toISOString();
   for (const m of await repo.listOpenMirrored()) {
     if (ourPositionIds.has(m.position)) continue;
+    // Grace window — see RECONCILE_GRACE_MS. An unparseable opened_at is treated as
+    // old rather than young: a malformed record should still be reclaimable.
+    const openedMs = Date.parse(m.opened_at);
+    if (Number.isFinite(openedMs) && nowMs - openedMs < RECONCILE_GRACE_MS) {
+      ctx.logger.info(
+        "follow",
+        `mirror ${short(m.position)} not yet visible on-chain — within the ${RECONCILE_GRACE_MS / 1000}s grace window, leaving it open`,
+      );
+      continue;
+    }
     await repo.updateMirrored(m.position, {
       closed_at: nowIso,
       close_reason: "reconciled: position no longer on-chain (closed outside the follow cycle)",
@@ -468,17 +491,40 @@ async function mirrorClose(
 }
 
 /**
- * Schedule the follow cycle. Overlap-skip is provided by the scheduler, plus a local
- * busy flag so a manual `runOnce` cannot interleave with a scheduled tick.
+ * Base scheduler cadence. Matches the schema minimum for `follow.intervalSec`, so the
+ * configured interval is always an exact multiple of ticks we can gate on.
+ */
+export const FOLLOW_BASE_TICK_MS = 15_000;
+
+/**
+ * Schedule the follow cycle.
+ *
+ * The watcher is created unconditionally and decides at TICK time whether to run.
+ * Gating at construction time instead would pin `follow.enabled`, `intervalSec`,
+ * `exclusiveExit` and `learnEnabled` to their boot values, so toggling any of them from
+ * the dashboard would appear to save and then do nothing until the next restart —
+ * `update_config` mutates each config section in place precisely so a running daemon can
+ * pick changes up. The cost of an idle watcher is one no-op timer every 15s.
+ *
+ * Overlap-skip comes from the scheduler; the local busy flag additionally stops a manual
+ * `runOnce` from interleaving with a scheduled tick.
  */
 export function createFollowWatcher(deps: FollowWatcherDeps): FollowWatcherHandle {
-  const intervalMs = deps.intervalMs ?? deps.ctx.config.follow.intervalSec * 1000;
   // Lives for the process, not the tick — the alert needs a run of consecutive failures.
   const staleCounters = new Map<string, number>();
   let busy = false;
+  let lastRunMs = 0;
+  const idle = (): FollowCycleResult => ({
+    kind: "ran",
+    seeded: [],
+    opened: 0,
+    closed: 0,
+    failures: 0,
+    reconciled: 0,
+  });
 
-  const tick = async (): Promise<FollowCycleResult> => {
-    if (busy) return { kind: "ran", seeded: [], opened: 0, closed: 0, failures: 0, reconciled: 0 };
+  const run = async (): Promise<FollowCycleResult> => {
+    if (busy) return idle();
     busy = true;
     try {
       return await runFollowCycle({ ...deps, staleCounters });
@@ -486,15 +532,31 @@ export function createFollowWatcher(deps: FollowWatcherDeps): FollowWatcherHandl
       deps.ctx.logger.warn("follow", "cycle threw", {
         error: e instanceof Error ? e.message : String(e),
       });
-      return { kind: "ran", seeded: [], opened: 0, closed: 0, failures: 1, reconciled: 0 };
+      return { ...idle(), failures: 1 };
     } finally {
       busy = false;
     }
   };
 
-  const handle = deps.scheduler.every(intervalMs, () => tick().then(() => {}), "follow");
+  const scheduledTick = async (): Promise<FollowCycleResult> => {
+    // Read live on every tick, never captured at construction.
+    if (!deps.ctx.config.follow.enabled) return { ...idle(), kind: "disabled" };
+    const intervalMs = deps.intervalMs ?? deps.ctx.config.follow.intervalSec * 1000;
+    const nowMs = deps.ctx.clock.now().getTime();
+    if (lastRunMs !== 0 && nowMs - lastRunMs < intervalMs) return idle();
+    lastRunMs = nowMs;
+    return run();
+  };
+
+  const handle = deps.scheduler.every(
+    FOLLOW_BASE_TICK_MS,
+    () => scheduledTick().then(() => {}),
+    "follow",
+  );
   return {
     stop: () => handle.cancel(),
-    runOnce: tick,
+    // Manual trigger bypasses the interval gate but not the feature switch —
+    // runFollowCycle reports `disabled` on its own.
+    runOnce: run,
   };
 }

@@ -23,7 +23,7 @@ import { removeFollowWalletTool } from "../app/tools/impls/remove-follow-wallet.
 import { listFollowWalletsTool } from "../app/tools/impls/list-follow-wallets.js";
 import { setFollowWalletEnabledTool } from "../app/tools/impls/set-follow-wallet-enabled.js";
 import { createMeteoraWalletWatcher } from "../adapters/market/meteora-wallet-watcher.js";
-import { createFollowWatcher } from "../app/follow/cycle.js";
+import { createFollowWatcher, FOLLOW_BASE_TICK_MS } from "../app/follow/cycle.js";
 import { createDryRunChainClient } from "../adapters/chain/dry-run.js";
 import { createMeteoraChainClient } from "../adapters/chain/meteora/client.js";
 import { createSolanaConnection, loadWalletKeypair } from "../adapters/chain/meteora/connection.js";
@@ -597,9 +597,11 @@ async function main(): Promise<void> {
       positionRepo: ctx.repos.positions,
       config: ctx.config.management,
       // Follow mirrors are exempt from trailing-TP and the fast-cut — the followed
-      // wallet owns the exit. Passing the repo only when the rule is armed keeps the
-      // poller's behaviour byte-identical when the feature is off.
-      ...(ctx.config.follow.exclusiveExit ? { followRepo: ctx.repos.follow } : {}),
+      // wallet owns the exit. Both are passed unconditionally and the poller reads
+      // `exclusiveExit` off the live section each tick, so toggling it from the
+      // dashboard takes effect without a restart.
+      followRepo: ctx.repos.follow,
+      followConfig: ctx.config.follow,
     });
     console.log("  pnl-poller: 30s trailing-TP + 15s two-phase confirm");
 
@@ -625,29 +627,32 @@ async function main(): Promise<void> {
 
     // ── Follow-the-wallet ───────────────────────────────────────────────────
     // Mirrors a followed wallet's entries/exits, routing around screening and the
-    // TA gate by design. Two switches must both be on: follow.enabled here, and
-    // `enabled` on the individual wallet. The watcher is only constructed when the
-    // global switch is on, so a disabled feature costs nothing at runtime.
-    let followWatcher: { stop: () => void } | null = null;
-    if (ctx.config.follow.enabled) {
-      const followInterval = ctx.config.follow.intervalSec * 1000;
-      followWatcher = createFollowWatcher({
-        ctx,
-        registry,
-        repo: ctx.repos.follow,
-        watcher: createMeteoraWalletWatcher({ logger: ctx.logger }),
-        scheduler,
-        intervalMs: followInterval,
-        ...(ctx.config.follow.learnEnabled ? { llm, model: modelFor("management") } : {}),
-      });
-      const followed = await ctx.repos.follow.listWallets();
-      console.log(
-        `  follow: every ${followInterval / 1000}s — ${followed.filter((w) => w.enabled).length}/${followed.length} wallet(s) armed, ` +
-          `${(ctx.config.follow.positionSizePct * 100).toFixed(0)}% of free SOL per mirror`,
-      );
-    } else {
-      console.log("  follow: disabled (follow.enabled=false)");
-    }
+    // TA gate by design. Two switches must both be on: follow.enabled, and `enabled`
+    // on the individual wallet.
+    //
+    // Constructed UNCONDITIONALLY. The watcher re-reads follow.enabled, intervalSec and
+    // learnEnabled on every tick, so all three can be toggled from the dashboard without
+    // a restart. Gating construction on the boot-time value would make the Config page
+    // silently lie: the save succeeds, the daemon keeps the old behaviour.
+    const followWatcher = createFollowWatcher({
+      ctx,
+      registry,
+      repo: ctx.repos.follow,
+      watcher: createMeteoraWalletWatcher({ logger: ctx.logger }),
+      scheduler,
+      // Passed unconditionally too — the retrospective checks follow.learnEnabled at
+      // call time, so withholding the client here would make turning it on a no-op.
+      llm,
+      model: modelFor("management"),
+    });
+    const followed = await ctx.repos.follow.listWallets();
+    console.log(
+      ctx.config.follow.enabled
+        ? `  follow: every ${ctx.config.follow.intervalSec}s — ${followed.filter((w) => w.enabled).length}/${followed.length} wallet(s) armed, ` +
+            `${(ctx.config.follow.positionSizePct * 100).toFixed(0)}% of free SOL per mirror` +
+            `, exit owned by ${ctx.config.follow.exclusiveExit ? "the followed wallet" : "local rules"}`
+        : `  follow: idle (follow.enabled=false) — watcher armed, starts within ${FOLLOW_BASE_TICK_MS / 1000}s of enabling it`,
+    );
 
     const healthMs = ctx.config.schedule.healthCheckIntervalMin * 60_000;
     scheduler.every(
@@ -710,7 +715,7 @@ async function main(): Promise<void> {
       shuttingDown = true;
       console.log(`\n${sig} — shutting down scheduler`);
       pollerHandle.stop();
-      followWatcher?.stop();
+      followWatcher.stop();
       shutdownHive();
       shutdownInbound();
       if (dashboardBridge) void dashboardBridge.close();

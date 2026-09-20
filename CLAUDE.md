@@ -288,7 +288,7 @@ Scheduled in `main()` (autonomous mode) via `createIntervalScheduler`:
 | health | `healthCheckIntervalMin` | `runHealthCycle` (`src/app/health/cycle.ts:24`) |
 | briefing | 24h (hardcoded) | `runBriefingCycle` (`src/app/briefing/cycle.ts:16`) |
 | hivemind-sync | 15m (hardcoded) | `createHiveMindSync` (`src/app/hivemind/sync.ts:38`) |
-| follow | `follow.intervalSec` (45s) | `createFollowWatcher` (`src/app/follow/cycle.ts`) — only scheduled when `follow.enabled` |
+| follow | 15s base tick, gated to `follow.intervalSec` | `createFollowWatcher` (`src/app/follow/cycle.ts`) — always constructed; enable/interval read per tick |
 
 The scheduler skips overlapping ticks per label (the `_busy` guard is built in).
 
@@ -442,6 +442,10 @@ for bin range + deposit + PnL.
    position is gone on-chain is finalised. Without it, `close_position` would later throw
    "pool for position … not found in snapshot" AND the stale record would keep matching
    the `already_mirrored` guard, blocking that pool from ever being mirrored again.
+   Records younger than `RECONCILE_GRACE_MS` (3 min) are skipped — a deploy returns its
+   position address before the RPC is guaranteed to serve it, and reconciling inside that
+   window would orphan a position that is genuinely open (which, under `exclusiveExit`,
+   nothing else would ever close).
 2. Per enabled wallet: snapshot their open pools → `diffFollowedWallet`
    (`domain/rules/follow-diff.ts`, pure).
 3. **Closes run before opens** so an intra-tick rotation frees its `maxPositions` slot first.
@@ -493,6 +497,15 @@ exit technicals at mirror-close, both persisted on the mirror record. With
 `followLearnEnabled`, the close then asks the LLM to infer why the wallet entered and
 exited and writes a `[follow:<label>] …` lesson tagged `follow` + `wallet:<prefix>`, which
 flows into future prompts through the normal `── LESSONS ──` block.
+
+**Every follow flag is hot-reloadable.** The watcher is constructed unconditionally in
+autonomous mode and re-reads `follow.enabled` and `intervalSec` on each 15s base tick;
+`llm`/`model` are always passed so `learnEnabled` can be turned on live; the pnl-poller
+receives `ctx.config.follow` by reference and reads `exclusiveExit` per tick; the
+management cycle reads it per cycle. This matters because `update_config` mutates each
+config section **in place** for exactly this reason — gating any of these at boot makes
+the dashboard Config page silently lie (save succeeds, behaviour does not change until
+the next restart). If you add a follow flag, read it at use time, never at wiring time.
 
 **Management tools**: `add_follow_wallet`, `remove_follow_wallet`, `list_follow_wallets`,
 `set_follow_wallet_enabled` (in `GENERAL_TOOLS` + the dashboard allowlist). Removing a

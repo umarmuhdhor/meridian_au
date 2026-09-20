@@ -213,6 +213,7 @@ describe("follow.exclusiveExit — pnl poller", () => {
       positionRepo: repoWithPeak(10),
       config: mgmt,
       followRepo: memFollowRepo({ mirrored: [mirror()] }),
+      followConfig: cfg().follow,
       pollIntervalMs: 30_000,
       confirmDelayMs: 15_000,
     });
@@ -222,6 +223,34 @@ describe("follow.exclusiveExit — pnl poller", () => {
 
     expect(poller.peekPending()).toEqual([]);
     expect(closeSpy).not.toHaveBeenCalled();
+  });
+
+  it("reads exclusiveExit live — flipping it off re-arms the poller without a restart", async () => {
+    const scheduler = createManualScheduler(CLOCK.now().getTime());
+    const closeSpy = vi.fn();
+    // The same object reference update_config mutates in place.
+    const liveFollow = cfg().follow;
+    const poller = createPnlPoller({
+      clock: CLOCK,
+      logger: nullLogger,
+      chain: chainWith(snapshot, closeSpy),
+      swap,
+      notifier: createCollectingNotifier(),
+      scheduler,
+      positionRepo: repoWithPeak(10),
+      config: mgmt,
+      followRepo: memFollowRepo({ mirrored: [mirror()] }),
+      followConfig: liveFollow,
+      pollIntervalMs: 30_000,
+      confirmDelayMs: 15_000,
+    });
+
+    await scheduler.advance(30_000);
+    expect(poller.peekPending()).toEqual([]);
+
+    liveFollow.exclusiveExit = false;
+    await scheduler.advance(30_000);
+    expect(poller.peekPending()).toHaveLength(1);
   });
 
   it("queues normally when no follow repo is wired", async () => {

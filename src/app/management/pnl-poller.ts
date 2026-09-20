@@ -6,6 +6,7 @@ import type { Notifier } from "../../ports/notifier.js";
 import type { Scheduler } from "../../ports/scheduler.js";
 import type { PositionRepo } from "../../ports/position-repo.js";
 import type { FollowRepo } from "../../ports/follow-repo.js";
+import type { FollowConfig } from "../../domain/schemas/config.js";
 import type { ManagementConfig } from "../../domain/schemas/config.js";
 import type { OnChainPosition, PositionsSnapshot } from "../../domain/schemas/chain.js";
 import { assessPnl } from "../../domain/rules/pnl.js";
@@ -147,11 +148,16 @@ export interface PnlPollerDeps {
   positionRepo: PositionRepo;
   config: ManagementConfig;
   /**
-   * When present, positions held by an open follow mirror are removed from the tick
-   * entirely — no trailing-TP queue, no smart-exit fast-cut. The followed wallet owns
-   * the exit (`follow.exclusiveExit`). Absent = the poller behaves exactly as before.
+   * When both are present AND `followConfig.exclusiveExit` reads true at TICK time,
+   * positions held by an open follow mirror are removed from the tick entirely — no
+   * trailing-TP queue, no smart-exit fast-cut. The followed wallet owns the exit.
+   *
+   * `followConfig` must be the LIVE config section (update_config mutates it in place),
+   * not a copy: reading it per tick is what makes the flag hot-reloadable instead of
+   * pinned to whatever it was at boot. Either absent = poller behaves exactly as before.
    */
   followRepo?: FollowRepo;
+  followConfig?: FollowConfig;
   pollIntervalMs?: number;
   confirmDelayMs?: number;
   confirmTolerancePct?: number;
@@ -192,9 +198,10 @@ export function createPnlPoller(deps: PnlPollerDeps): PnlPollerHandle {
       // Drop follow-mirrored positions before any exit logic runs. Filtering here
       // rather than inside `tickPnlPoller` keeps the pure function unaware of the
       // feature, and covers BOTH paths it owns (trailing-TP and the fast-cut).
-      const followHeld = deps.followRepo
-        ? new Set((await deps.followRepo.listOpenMirrored()).map((m) => m.position))
-        : new Set<string>();
+      const followHeld =
+        deps.followRepo && deps.followConfig?.exclusiveExit
+          ? new Set((await deps.followRepo.listOpenMirrored()).map((m) => m.position))
+          : new Set<string>();
       const eligible =
         followHeld.size > 0
           ? snap.positions.filter((p) => !followHeld.has(p.position))

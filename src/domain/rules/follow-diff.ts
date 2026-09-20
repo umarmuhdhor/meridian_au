@@ -318,3 +318,75 @@ export function mirrorCapacity(input: MirrorCapacityInput): MirrorCapacity {
   if (slots > 0) return { slots, blockedBy: null };
   return { slots: 0, blockedBy: mirrorSlots <= 0 ? "max_mirrored" : "max_positions" };
 }
+
+export type MirrorOrphanCause = "follow_disabled" | "wallet_disabled" | "wallet_removed";
+
+export interface OrphanedMirror {
+  mirror: MirroredPosition;
+  cause: MirrorOrphanCause;
+}
+
+export interface MirrorOwnershipInput {
+  /** The global `follow.enabled` switch. */
+  followEnabled: boolean;
+  /** Every followed wallet on record, enabled or not. */
+  wallets: readonly { address: string; enabled: boolean }[];
+  openMirrors: readonly MirroredPosition[];
+}
+
+export interface MirrorOwnership {
+  /** Mirrors whose source wallet is still actively polled — that wallet owns the exit. */
+  owned: MirroredPosition[];
+  /** Mirrors with no source left to follow, and why. */
+  orphaned: OrphanedMirror[];
+}
+
+/**
+ * Who, right now, is entitled to decide when each open mirror closes?
+ *
+ * `follow.exclusiveExit` hands a mirrored position's exit to the wallet it was copied
+ * from and switches off every local rule for it. That trade is only sound while such a
+ * wallet actually exists and is being polled. The moment it stops being followed —
+ * the master switch goes off, the wallet is disabled, or it is removed outright — the
+ * follow cycle will never close that position, and if the exemption still stood nothing
+ * else would either. The position would answer to nobody.
+ *
+ * So ownership is computed from the SAME conditions the follow cycle uses to decide
+ * whether it will act on a wallet. Anything outside that set is orphaned, and the caller
+ * is responsible for it: the cycle drains orphans by closing them, while management and
+ * the poller re-arm their local rules over them in the meantime.
+ */
+export function partitionMirrorOwnership(input: MirrorOwnershipInput): MirrorOwnership {
+  const { followEnabled, wallets, openMirrors } = input;
+  const known = new Map(wallets.map((w) => [w.address, w.enabled]));
+
+  const owned: MirroredPosition[] = [];
+  const orphaned: OrphanedMirror[] = [];
+
+  for (const mirror of openMirrors) {
+    const walletEnabled = known.get(mirror.source_wallet);
+    let cause: MirrorOrphanCause | null = null;
+    // Order matters only for the message: the master switch is reported first because
+    // it explains every mirror at once, which is what the operator needs to read.
+    if (!followEnabled) cause = "follow_disabled";
+    else if (walletEnabled === undefined) cause = "wallet_removed";
+    else if (!walletEnabled) cause = "wallet_disabled";
+
+    if (cause == null) owned.push(mirror);
+    else orphaned.push({ mirror, cause });
+  }
+
+  return { owned, orphaned };
+}
+
+/** One line explaining an orphan, used in the close reason and the operator alert. */
+export function describeOrphanCause(cause: MirrorOrphanCause): string {
+  switch (cause) {
+    case "follow_disabled":
+      return "follow.enabled was turned off";
+    case "wallet_disabled":
+      return "the followed wallet was disabled";
+    case "wallet_removed":
+      return "the followed wallet was removed";
+  }
+}

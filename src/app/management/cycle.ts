@@ -10,6 +10,7 @@ import type { OnChainPosition } from "../../domain/schemas/chain.js";
 import type { KlineTimeframe, TechnicalsSummary } from "../../domain/schemas/kline.js";
 import { computeTechnicals, formatTechnicalsLine } from "../../domain/format/technicals.js";
 import type { SageExitAdvisor } from "../../ports/sage-exit-advisor.js";
+import { partitionMirrorOwnership } from "../../domain/rules/follow-diff.js";
 
 const EXIT_ADVISOR_PROMPT = [
   "You are Meridian's DLMM position EXIT advisor. Given ONE open position's live",
@@ -384,13 +385,23 @@ export async function runManagementCycle(deps: ManagementCycleDeps): Promise<Man
   // while the wallet being copied is still holding, which is precisely what
   // copy-trading is supposed to avoid.
   //
+  // The exemption covers only mirrors that are still OWNED — whose source wallet is
+  // enabled, present, and being polled under a live `follow.enabled`. An orphan (master
+  // switch off, wallet disabled, wallet removed) has no one left to decide its exit, so
+  // it goes back under local rules here. The follow cycle drains orphans by closing them
+  // outright; this is what covers the window until its next tick, and what covers the
+  // case where the follow watcher is not running at all.
+  //
   // CLAIM is deliberately left alone: collecting fees does not end the position.
   // Optional-chained: a caller may hand us a config/context assembled before this
   // feature existed, and management must keep working rather than throw on a missing key.
   if (ctx.config.follow?.exclusiveExit && ctx.repos.follow) {
-    const followHeld = new Set(
-      (await ctx.repos.follow.listOpenMirrored()).map((m) => m.position),
-    );
+    const { owned } = partitionMirrorOwnership({
+      followEnabled: ctx.config.follow.enabled,
+      wallets: await ctx.repos.follow.listWallets(),
+      openMirrors: await ctx.repos.follow.listOpenMirrored(),
+    });
+    const followHeld = new Set(owned.map((m) => m.position));
     if (followHeld.size > 0) {
       for (const plan of plans) {
         if (!followHeld.has(plan.position.position)) continue;

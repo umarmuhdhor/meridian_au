@@ -140,6 +140,11 @@ export type TokensConfig = z.infer<typeof TokensConfigSchema>;
  * Off by default; arming it is a two-step (global `enabled` + per-wallet `enabled`).
  */
 export const FollowConfigSchema = z.object({
+  /**
+   * Master switch. Turning it OFF is not a pause: every open mirror is closed on the
+   * next follow tick, because `exclusiveExit` has already handed those positions' exits
+   * to wallets that are no longer being polled. See `partitionMirrorOwnership`.
+   */
   enabled: z.boolean().default(false),
   /** Poll cadence. Copy-trading latency is the whole game, so this is seconds, not minutes. */
   intervalSec: z.number().int().min(15).max(3600).default(45),

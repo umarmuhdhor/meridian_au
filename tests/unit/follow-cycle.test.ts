@@ -356,3 +356,162 @@ describe("runFollowCycle", () => {
     expect(chain.peekPositions()).toHaveLength(1);
   });
 });
+
+/**
+ * A mirror we cannot read is a mirror we cannot copy.
+ *
+ * `getPositionsInPool` answers `null` for a failed read and `[]` for a pool they
+ * genuinely hold nothing in. Collapsing the two would open the position at a guessed
+ * fallback range with no record of theirs — and since re-center detection keys on their
+ * position address and lower bin, that mirror could never detect a re-center again.
+ */
+describe("follow cycle — an unreadable source position", () => {
+  /** Watcher whose pool list works but whose position detail fails. */
+  function blindWatcher(pools: string[]): WalletWatcher {
+    return {
+      async getOpenPools(w) {
+        return { wallet: w, pools, positions: [], reliable: true };
+      },
+      async getPositionsInPool() {
+        return null;
+      },
+    };
+  }
+
+  function emptyPoolWatcher(pools: string[]): WalletWatcher {
+    return {
+      async getOpenPools(w) {
+        return { wallet: w, pools, positions: [], reliable: true };
+      },
+      async getPositionsInPool() {
+        return [];
+      },
+    };
+  }
+
+  it("does not deploy when their position cannot be read", async () => {
+    const chain = chainWith();
+    const repo = memFollowRepo({ wallets: [wallet()], seen: { [WHALE]: [] }, seeded: [WHALE] });
+    const ctx = makeCtx({ clock: CLOCK, config: cfgWith(), chain });
+
+    const r = await runFollowCycle({
+      ctx,
+      registry: REGISTRY,
+      watcher: blindWatcher(["poolA"]),
+      repo,
+    });
+
+    expect(r.opened).toBe(0);
+    expect(r.failures).toBe(1);
+    expect(chain.peekPositions()).toHaveLength(0);
+  });
+
+  it("withholds the pool from the baseline so the next tick tries again", async () => {
+    const chain = chainWith();
+    const repo = memFollowRepo({ wallets: [wallet()], seen: { [WHALE]: [] }, seeded: [WHALE] });
+    const ctx = makeCtx({ clock: CLOCK, config: cfgWith(), chain });
+
+    await runFollowCycle({ ctx, registry: REGISTRY, watcher: blindWatcher(["poolA"]), repo });
+    // Remembering poolA here would mean a transient datapi blip permanently costs us
+    // this entry — the diff would never see it as new again.
+    expect(await repo.getSeen(WHALE)).toEqual([]);
+
+    // datapi recovers.
+    const second = await runFollowCycle({
+      ctx,
+      registry: REGISTRY,
+      watcher: fakeWatcher(["poolA"]),
+      repo,
+    });
+
+    expect(second.opened).toBe(1);
+    expect(chain.peekPositions()).toHaveLength(1);
+  });
+
+  it("mirrors their real range once the read succeeds, not the fallback width", async () => {
+    const chain = chainWith();
+    const repo = memFollowRepo({ wallets: [wallet()], seen: { [WHALE]: [] }, seeded: [WHALE] });
+    const ctx = makeCtx({ clock: CLOCK, config: cfgWith(), chain });
+
+    await runFollowCycle({
+      ctx,
+      registry: REGISTRY,
+      // active bin 1000, their lower bin 940 → 60 bins below, not fallbackBinsBelow 55.
+      watcher: fakeWatcher(["poolA"], { position: "theirPos", lower_bin: 940 }),
+      repo,
+    });
+
+    const rec = (await repo.listOpenMirrored())[0]!;
+    expect(rec.source_position).toBe("theirPos");
+    expect(rec.source_lower_bin).toBe(940);
+    // Populated source fields are what keeps re-center detection alive for this mirror.
+    expect(rec.entry_context?.range_source).toBe("mirrored");
+  });
+
+  it("advances the baseline when they genuinely hold nothing there", async () => {
+    // A successful read of an empty pool is a decision, not a failure: they left
+    // between the two polls. Nothing to copy, and no reason to keep re-checking.
+    const chain = chainWith();
+    const repo = memFollowRepo({ wallets: [wallet()], seen: { [WHALE]: [] }, seeded: [WHALE] });
+    const ctx = makeCtx({ clock: CLOCK, config: cfgWith(), chain });
+
+    const r = await runFollowCycle({
+      ctx,
+      registry: REGISTRY,
+      watcher: emptyPoolWatcher(["poolA"]),
+      repo,
+    });
+
+    expect(r.opened).toBe(0);
+    expect(chain.peekPositions()).toHaveLength(0);
+    expect(await repo.getSeen(WHALE)).toEqual(["poolA"]);
+  });
+
+  it("skips the re-center check rather than closing when their position cannot be read", async () => {
+    const chain = chainWith([openPosition({ position: "m1", pool: "poolA" })]);
+    const repo = memFollowRepo({
+      wallets: [wallet()],
+      seen: { [WHALE]: ["poolA"] },
+      seeded: [WHALE],
+      mirrored: [
+        {
+          position: "m1",
+          pool: "poolA",
+          pool_name: null,
+          base_mint: null,
+          source_wallet: WHALE,
+          source_label: "whale",
+          source_position: "theirPos",
+          opened_at: "2026-09-19T00:00:00.000Z",
+          closed_at: null,
+          close_reason: null,
+          amount_sol: 1,
+          lower_bin: 940,
+          upper_bin: 1000,
+          source_lower_bin: 940,
+          source_upper_bin: 1000,
+          source_deposit_sol: 50,
+          entry_technicals: null,
+          entry_context: null,
+          exit_technicals: null,
+          exit_context: null,
+          source_pnl_pct: null,
+          lesson_id: null,
+        },
+      ],
+    });
+    const ctx = makeCtx({ clock: CLOCK, config: cfgWith({ mirrorRecenter: true }), chain });
+
+    const r = await runFollowCycle({
+      ctx,
+      registry: REGISTRY,
+      watcher: blindWatcher(["poolA"]),
+      repo,
+    });
+
+    // A failed read would otherwise look exactly like "their position is gone", and
+    // closing on it costs real fees for a re-center we have no evidence of.
+    expect(r.recentered).toBe(0);
+    expect(chain.peekPositions()).toHaveLength(1);
+  });
+});

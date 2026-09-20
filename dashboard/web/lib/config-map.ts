@@ -137,7 +137,7 @@ export const CONFIG_FIELDS: ConfigField[] = [
   f("generalModel", "string", "automation", { unit: "model slug", help: "OpenRouter model for chat / Telegram. Must be an exact slug." }),
 
   // ── follow the wallet ──
-  f("followEnabled", "boolean", "follow", { help: "MASTER SWITCH for copy-trading. When on, every ENABLED followed wallet is polled and its DLMM entries/exits are mirrored. Screening, the TA gate, pool/token cooldowns and both blacklists are bypassed on this path — wallet balance and maxPositions still apply. Off = the watcher is never even started." }),
+  f("followEnabled", "boolean", "follow", { help: "MASTER SWITCH for copy-trading. When on, every ENABLED followed wallet is polled and its DLMM entries/exits are mirrored. Screening, the TA gate, pool/token cooldowns and both blacklists are bypassed on this path — wallet balance and maxPositions still apply. WARNING: turning this OFF closes every open mirrored position on the next follow tick. A mirror has no local exit rules while it is mirrored, so it is unwound rather than left with nothing to close it — this switch executes trades, it is not a safe pause button." }),
   f("followIntervalSec", "number", "follow", { unit: "seconds", help: "How often each followed wallet is polled. Lower = faster mirroring, more datapi requests. 45 = every 45s." }),
   f("followPositionSizePct", "number", "follow", { unit: "fraction", help: "Fraction of FREE SOL (balance minus gasReserve) committed per mirrored entry. 0.35 = 35%. Their size is irrelevant — yours scales with your own balance." }),
   f("followMinDeploySol", "number", "follow", { unit: "SOL", help: "Skip the mirror when the sized amount lands below this. Prevents dust positions when the wallet is nearly empty." }),

@@ -76,6 +76,95 @@ describe("createMeteoraWalletWatcher.getOpenPools", () => {
     expect(snap.reliable).toBe(true);
   });
 
+  /**
+   * A pool list that is INCOMPLETE but reported reliable is the mass-false-exit case:
+   * the diff reads every pool it cannot see as an exit and closes those mirrors. So the
+   * snapshot is trusted only when a page positively says it is the last one.
+   */
+  describe("truncation", () => {
+    /** Serves `pages` in order, then repeats the final page. */
+    function paged(pages: unknown[]): FetchImpl {
+      let i = 0;
+      return async () => {
+        const body = pages[Math.min(i++, pages.length - 1)];
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          json: async () => body,
+          text: async () => JSON.stringify(body),
+        };
+      };
+    }
+
+    const fullPage = (tag: string, hasNext?: boolean | null) => ({
+      pools: Array.from({ length: 50 }, (_, n) => ({ poolAddress: `${tag}-${n}` })),
+      ...(hasNext === undefined ? {} : { hasNext }),
+    });
+
+    it("is unreliable when every page still claims there is another", async () => {
+      // The page cap runs out before the list ends — we are holding a prefix, not a set.
+      const watcher = createMeteoraWalletWatcher({
+        logger: nullLogger,
+        fetchImpl: paged([fullPage("p", true)]),
+      });
+      const snap = await watcher.getOpenPools(W);
+      expect(snap.reliable).toBe(false);
+    });
+
+    it("is unreliable when a full page carries no continuation signal at all", async () => {
+      // `hasNext` gone from the response (renamed upstream) plus a full page: we cannot
+      // tell the end of the list from the start of a silent truncation.
+      const watcher = createMeteoraWalletWatcher({
+        logger: nullLogger,
+        fetchImpl: paged([fullPage("p")]),
+      });
+      const snap = await watcher.getOpenPools(W);
+      expect(snap.reliable).toBe(false);
+    });
+
+    it("trusts hasNext:false even on a page that happens to be full", async () => {
+      // A wallet holding exactly PAGE_SIZE pools must not be permanently unreliable —
+      // that would suppress its exits forever, which is its own way of stranding mirrors.
+      const watcher = createMeteoraWalletWatcher({
+        logger: nullLogger,
+        fetchImpl: paged([fullPage("p", false)]),
+      });
+      const snap = await watcher.getOpenPools(W);
+      expect(snap.reliable).toBe(true);
+      expect(snap.pools).toHaveLength(50);
+    });
+
+    it("trusts a short page even with no continuation signal", async () => {
+      const watcher = createMeteoraWalletWatcher({
+        logger: nullLogger,
+        fetchImpl: paged([{ pools: [{ poolAddress: "poolA" }] }]),
+      });
+      const snap = await watcher.getOpenPools(W);
+      expect(snap.reliable).toBe(true);
+      expect(snap.pools).toEqual(["poolA"]);
+    });
+
+    it("keeps paging past a full unsignalled page and ends on the short one", async () => {
+      const watcher = createMeteoraWalletWatcher({
+        logger: nullLogger,
+        fetchImpl: paged([fullPage("a"), { pools: [{ poolAddress: "tail" }] }]),
+      });
+      const snap = await watcher.getOpenPools(W);
+      expect(snap.reliable).toBe(true);
+      expect(snap.pools).toHaveLength(51);
+    });
+
+    it("treats hasNext:null the same as absent", async () => {
+      const watcher = createMeteoraWalletWatcher({
+        logger: nullLogger,
+        fetchImpl: paged([fullPage("p", null)]),
+      });
+      const snap = await watcher.getOpenPools(W);
+      expect(snap.reliable).toBe(false);
+    });
+  });
+
   it("de-duplicates a pool that appears on more than one page", async () => {
     let call = 0;
     const watcher = createMeteoraWalletWatcher({
@@ -129,10 +218,28 @@ describe("createMeteoraWalletWatcher.getPositionsInPool", () => {
     });
   });
 
-  it("returns an empty list on an upstream error rather than throwing", async () => {
+  it("returns null on an upstream error — distinct from an empty pool", async () => {
     const watcher = createMeteoraWalletWatcher({
       logger: nullLogger,
       fetchImpl: fetchStub({}, ["/pnl"]),
+    });
+    // null, not [] — the follow cycle defers a mirror it cannot read rather than
+    // opening one at a guessed range, and it can only tell the two apart here.
+    await expect(watcher.getPositionsInPool(W, "poolA")).resolves.toBeNull();
+  });
+
+  it("returns null when the body does not match the schema", async () => {
+    const watcher = createMeteoraWalletWatcher({
+      logger: nullLogger,
+      fetchImpl: fetchStub({ "/pnl": { positions: [{ lowerBinId: "not-a-number" }] } }),
+    });
+    await expect(watcher.getPositionsInPool(W, "poolA")).resolves.toBeNull();
+  });
+
+  it("returns an empty array when they genuinely hold nothing in the pool", async () => {
+    const watcher = createMeteoraWalletWatcher({
+      logger: nullLogger,
+      fetchImpl: fetchStub({ "/pnl": { positions: [] } }),
     });
     await expect(watcher.getPositionsInPool(W, "poolA")).resolves.toEqual([]);
   });

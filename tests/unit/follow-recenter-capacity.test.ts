@@ -304,7 +304,7 @@ describe("follow cycle — maxMirrored cap", () => {
       config: cfg({ maxMirrored: 2, mirrorRecenter: false }),
       repos: { follow: repo },
     });
-    const watcher = watcherWith(["poolA", "poolB", "poolC"], []);
+    const watcher = watcherWith(["poolA", "poolB", "poolC"], [theirPos()]);
 
     const r = await runFollowCycle({ ctx, registry: REGISTRY, watcher, repo });
 
@@ -340,7 +340,7 @@ describe("follow cycle — maxMirrored cap", () => {
       repos: { follow: repo },
     });
     // They left poolA and entered poolC — a rotation at the mirror cap.
-    const watcher = watcherWith(["poolB", "poolC"], []);
+    const watcher = watcherWith(["poolB", "poolC"], [theirPos()]);
 
     const r = await runFollowCycle({ ctx, registry: REGISTRY, watcher, repo });
 

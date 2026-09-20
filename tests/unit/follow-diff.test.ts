@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   diffFollowedWallet,
+  partitionMirrorOwnership,
   planMirrorRange,
   planMirrorSize,
 } from "../../src/domain/rules/follow-diff.js";
@@ -205,5 +206,70 @@ describe("planMirrorRange", () => {
   it("falls back when their whole range sits at or above the active bin", () => {
     const r = planMirrorRange({ ...base, activeBin: 1000, sourceLowerBin: 1000 });
     expect(r.source).toBe("fallback");
+  });
+});
+
+describe("partitionMirrorOwnership", () => {
+  const armed = [{ address: "W", enabled: true }];
+
+  it("leaves a mirror owned while its wallet is enabled and followed", () => {
+    const r = partitionMirrorOwnership({
+      followEnabled: true,
+      wallets: armed,
+      openMirrors: [mirror("poolA")],
+    });
+    expect(r.owned).toHaveLength(1);
+    expect(r.orphaned).toEqual([]);
+  });
+
+  it("orphans everything when the master switch is off", () => {
+    const r = partitionMirrorOwnership({
+      followEnabled: false,
+      wallets: armed,
+      openMirrors: [mirror("poolA"), mirror("poolB")],
+    });
+    expect(r.owned).toEqual([]);
+    expect(r.orphaned.map((o) => o.cause)).toEqual(["follow_disabled", "follow_disabled"]);
+  });
+
+  it("orphans a mirror whose wallet is disabled", () => {
+    const r = partitionMirrorOwnership({
+      followEnabled: true,
+      wallets: [{ address: "W", enabled: false }],
+      openMirrors: [mirror("poolA")],
+    });
+    expect(r.orphaned[0]!.cause).toBe("wallet_disabled");
+  });
+
+  it("orphans a mirror whose wallet is no longer on the list", () => {
+    const r = partitionMirrorOwnership({
+      followEnabled: true,
+      wallets: [],
+      openMirrors: [mirror("poolA")],
+    });
+    expect(r.orphaned[0]!.cause).toBe("wallet_removed");
+  });
+
+  it("splits per wallet rather than all-or-nothing", () => {
+    const other: MirroredPosition = { ...mirror("poolB"), source_wallet: "X" };
+    const r = partitionMirrorOwnership({
+      followEnabled: true,
+      wallets: [
+        { address: "W", enabled: true },
+        { address: "X", enabled: false },
+      ],
+      openMirrors: [mirror("poolA"), other],
+    });
+    expect(r.owned.map((m) => m.pool)).toEqual(["poolA"]);
+    expect(r.orphaned.map((o) => o.mirror.pool)).toEqual(["poolB"]);
+  });
+
+  it("reports the master switch ahead of a per-wallet cause — it explains them all", () => {
+    const r = partitionMirrorOwnership({
+      followEnabled: false,
+      wallets: [{ address: "W", enabled: false }],
+      openMirrors: [mirror("poolA")],
+    });
+    expect(r.orphaned[0]!.cause).toBe("follow_disabled");
   });
 });

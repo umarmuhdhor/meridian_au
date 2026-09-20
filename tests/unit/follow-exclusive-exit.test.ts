@@ -73,6 +73,22 @@ function mirror(over: Partial<MirroredPosition> = {}): MirroredPosition {
   };
 }
 
+/**
+ * The wallet a mirror is copied from. Required by every exemption test: a mirror is only
+ * exempt from local exit rules while an enabled, still-followed wallet owns its exit.
+ */
+function followedWallet(over: Partial<FollowedWallet> = {}): FollowedWallet {
+  return {
+    address: WHALE,
+    label: "friend",
+    enabled: true,
+    addedAt: "2026-09-19T00:00:00.000Z",
+    sizePctOverride: null,
+    notes: null,
+    ...over,
+  };
+}
+
 function cfg(followOver: Record<string, unknown> = {}): AppConfig {
   const base = makeCtx({ clock: CLOCK }).config;
   return { ...base, follow: { ...base.follow, enabled: true, ...followOver } } as AppConfig;
@@ -81,7 +97,7 @@ function cfg(followOver: Record<string, unknown> = {}): AppConfig {
 describe("follow.exclusiveExit — management cycle", () => {
   it("does NOT close a mirrored position that trips the stop loss", async () => {
     const chain = createDryRunChainClient({ clock: CLOCK, seed: { positions: [pos()] } });
-    const follow = memFollowRepo({ mirrored: [mirror()] });
+    const follow = memFollowRepo({ wallets: [followedWallet()], mirrored: [mirror()] });
     const ctx = makeCtx({ clock: CLOCK, chain, config: cfg(), repos: { follow } });
 
     const out = await runManagementCycle({ ctx, registry: REGISTRY });
@@ -92,7 +108,7 @@ describe("follow.exclusiveExit — management cycle", () => {
 
   it("DOES close the same position when exclusiveExit is off", async () => {
     const chain = createDryRunChainClient({ clock: CLOCK, seed: { positions: [pos()] } });
-    const follow = memFollowRepo({ mirrored: [mirror()] });
+    const follow = memFollowRepo({ wallets: [followedWallet()], mirrored: [mirror()] });
     const ctx = makeCtx({
       clock: CLOCK,
       chain,
@@ -111,7 +127,7 @@ describe("follow.exclusiveExit — management cycle", () => {
       clock: CLOCK,
       seed: { positions: [pos(), pos({ position: "ownPos", pool: "poolB" })] },
     });
-    const follow = memFollowRepo({ mirrored: [mirror()] });
+    const follow = memFollowRepo({ wallets: [followedWallet()], mirrored: [mirror()] });
     const ctx = makeCtx({ clock: CLOCK, chain, config: cfg(), repos: { follow } });
 
     await runManagementCycle({ ctx, registry: REGISTRY });
@@ -125,7 +141,7 @@ describe("follow.exclusiveExit — management cycle", () => {
       clock: CLOCK,
       seed: { positions: [pos({ pnl_pct: 1, unclaimed_fees_usd: 50 })] },
     });
-    const follow = memFollowRepo({ mirrored: [mirror()] });
+    const follow = memFollowRepo({ wallets: [followedWallet()], mirrored: [mirror()] });
     const ctx = makeCtx({ clock: CLOCK, chain, config: cfg(), repos: { follow } });
 
     const out = await runManagementCycle({ ctx, registry: REGISTRY });
@@ -212,7 +228,7 @@ describe("follow.exclusiveExit — pnl poller", () => {
       scheduler,
       positionRepo: repoWithPeak(10),
       config: mgmt,
-      followRepo: memFollowRepo({ mirrored: [mirror()] }),
+      followRepo: memFollowRepo({ wallets: [followedWallet()], mirrored: [mirror()] }),
       followConfig: cfg().follow,
       pollIntervalMs: 30_000,
       confirmDelayMs: 15_000,
@@ -239,7 +255,7 @@ describe("follow.exclusiveExit — pnl poller", () => {
       scheduler,
       positionRepo: repoWithPeak(10),
       config: mgmt,
-      followRepo: memFollowRepo({ mirrored: [mirror()] }),
+      followRepo: memFollowRepo({ wallets: [followedWallet()], mirrored: [mirror()] }),
       followConfig: liveFollow,
       pollIntervalMs: 30_000,
       confirmDelayMs: 15_000,
@@ -439,5 +455,187 @@ describe("follow cycle — stale snapshot alert", () => {
     };
     await runFollowCycle({ ctx, registry: REGISTRY, watcher: healthy, repo, staleCounters });
     expect(staleCounters.has(WHALE)).toBe(false);
+  });
+});
+
+/**
+ * Unfollow means unwind.
+ *
+ * `exclusiveExit` hands a mirror's exit to the wallet it was copied from and disarms
+ * every local rule for it. That only holds while such a wallet is being polled, so the
+ * three ways of ending that — master switch off, wallet disabled, wallet removed — must
+ * leave no position behind that nobody can close.
+ */
+describe("follow cycle — draining mirrors that lost their wallet", () => {
+  function watcher(): WalletWatcher {
+    return {
+      async getOpenPools(w) {
+        return { wallet: w, pools: ["poolA"], positions: [], reliable: true };
+      },
+      async getPositionsInPool() {
+        return [];
+      },
+    };
+  }
+
+  function setup(over: { wallets?: FollowedWallet[]; enabled?: boolean } = {}) {
+    const chain = createDryRunChainClient({ clock: CLOCK, seed: { positions: [pos()] } });
+    const repo = memFollowRepo({
+      wallets: over.wallets ?? [followedWallet()],
+      seen: { [WHALE]: ["poolA"] },
+      seeded: [WHALE],
+      mirrored: [mirror()],
+    });
+    const notifier = createCollectingNotifier();
+    const ctx = makeCtx({
+      clock: CLOCK,
+      chain,
+      notifier,
+      config: cfg({ enabled: over.enabled ?? true }),
+      repos: { follow: repo },
+    });
+    return { chain, repo, ctx, notifier };
+  }
+
+  it("closes a mirror when the master switch is turned off", async () => {
+    const { chain, repo, ctx } = setup({ enabled: false });
+
+    const r = await runFollowCycle({ ctx, registry: REGISTRY, watcher: watcher(), repo });
+
+    // The switch is still honoured — it just does not strand a position on the way out.
+    expect(r.kind).toBe("disabled");
+    expect(r.drained).toBe(1);
+    expect(chain.peekPositions()).toHaveLength(0);
+    expect((await repo.listMirrored())[0]!.close_reason).toContain("follow.enabled was turned off");
+  });
+
+  it("closes a mirror whose wallet was disabled", async () => {
+    const { chain, repo, ctx } = setup({ wallets: [followedWallet({ enabled: false })] });
+
+    const r = await runFollowCycle({ ctx, registry: REGISTRY, watcher: watcher(), repo });
+
+    expect(r.drained).toBe(1);
+    expect(chain.peekPositions()).toHaveLength(0);
+    expect((await repo.listMirrored())[0]!.close_reason).toContain("wallet was disabled");
+  });
+
+  it("closes a mirror whose wallet was removed outright", async () => {
+    const { chain, repo, ctx } = setup({ wallets: [] });
+
+    const r = await runFollowCycle({ ctx, registry: REGISTRY, watcher: watcher(), repo });
+
+    expect(r.drained).toBe(1);
+    expect(chain.peekPositions()).toHaveLength(0);
+    expect((await repo.listMirrored())[0]!.close_reason).toContain("wallet was removed");
+  });
+
+  it("warns the operator before it closes anything", async () => {
+    const { ctx, repo, notifier } = setup({ enabled: false });
+
+    await runFollowCycle({ ctx, registry: REGISTRY, watcher: watcher(), repo });
+
+    // These are on-chain closes the operator did not ask for directly, so silence is
+    // not an option — the warning has to name the reason.
+    const warned = notifier.recorded.filter(
+      (m): m is { type: "notify"; kind: string; text: string } =>
+        m.type === "notify" && m.kind === "warn",
+    );
+    expect(warned.some((m) => m.text.includes("follow.enabled was turned off"))).toBe(true);
+  });
+
+  it("does NOT drain when the state file cannot be read", async () => {
+    // An unreadable file answers `listWallets()` with an empty array, which is exactly
+    // what a deliberate unfollow looks like. Closing on that would turn a parse error
+    // into a liquidation, so the tick is refused instead.
+    const chain = createDryRunChainClient({ clock: CLOCK, seed: { positions: [pos()] } });
+    const repo = memFollowRepo({ wallets: [], mirrored: [mirror()] });
+    const broken: typeof repo = {
+      ...repo,
+      async load() {
+        return { ok: false, error: { kind: "invalid", issues: ["corrupt"] } } as Awaited<
+          ReturnType<typeof repo.load>
+        >;
+      },
+    };
+    const ctx = makeCtx({
+      clock: CLOCK,
+      chain,
+      config: cfg({ enabled: false }),
+      repos: { follow: broken },
+    });
+
+    const r = await runFollowCycle({ ctx, registry: REGISTRY, watcher: watcher(), repo: broken });
+
+    expect(r.drained).toBe(0);
+    expect(r.failures).toBe(1);
+    expect(chain.peekPositions()).toHaveLength(1);
+  });
+
+  it("leaves a mirror alone while its wallet is still followed and enabled", async () => {
+    const { chain, repo, ctx } = setup();
+
+    const r = await runFollowCycle({ ctx, registry: REGISTRY, watcher: watcher(), repo });
+
+    expect(r.drained).toBe(0);
+    expect(chain.peekPositions()).toHaveLength(1);
+  });
+
+  it("retries on the next tick when the close fails", async () => {
+    const { repo, ctx } = setup({ enabled: false });
+    // No such position on-chain in the second cycle's eyes — force the close to fail by
+    // pointing the record at an address the chain does not know.
+    await repo.addMirrored(mirror({ position: "ghostPos", opened_at: "2026-09-19T00:00:00Z" }));
+
+    const r = await runFollowCycle({ ctx, registry: REGISTRY, watcher: watcher(), repo });
+
+    // Reconcile claims the ghost (it is not on-chain), the real mirror drains. Either
+    // way nothing is silently marked closed while still open.
+    expect(r.drained + r.reconciled).toBe(2);
+    expect(await repo.listOpenMirrored()).toEqual([]);
+  });
+});
+
+describe("follow.exclusiveExit — an orphaned mirror goes back under local rules", () => {
+  it("closes on the stop loss once its wallet is removed", async () => {
+    const chain = createDryRunChainClient({ clock: CLOCK, seed: { positions: [pos()] } });
+    // Mirror on record, wallet gone: the follow cycle will never close this, so
+    // management must not treat it as someone else's responsibility.
+    const follow = memFollowRepo({ wallets: [], mirrored: [mirror()] });
+    const ctx = makeCtx({ clock: CLOCK, chain, config: cfg(), repos: { follow } });
+
+    const out = await runManagementCycle({ ctx, registry: REGISTRY });
+
+    expect(out.kind).toBe("executed");
+    expect(chain.peekPositions()).toHaveLength(0);
+  });
+
+  it("closes on the stop loss once its wallet is disabled", async () => {
+    const chain = createDryRunChainClient({ clock: CLOCK, seed: { positions: [pos()] } });
+    const follow = memFollowRepo({
+      wallets: [followedWallet({ enabled: false })],
+      mirrored: [mirror()],
+    });
+    const ctx = makeCtx({ clock: CLOCK, chain, config: cfg(), repos: { follow } });
+
+    const out = await runManagementCycle({ ctx, registry: REGISTRY });
+
+    expect(out.kind).toBe("executed");
+    expect(chain.peekPositions()).toHaveLength(0);
+  });
+
+  it("closes on the stop loss once the master switch is off", async () => {
+    const chain = createDryRunChainClient({ clock: CLOCK, seed: { positions: [pos()] } });
+    const follow = memFollowRepo({ wallets: [followedWallet()], mirrored: [mirror()] });
+    const ctx = makeCtx({
+      clock: CLOCK,
+      chain,
+      config: cfg({ enabled: false }),
+      repos: { follow },
+    });
+
+    const out = await runManagementCycle({ ctx, registry: REGISTRY });
+
+    expect(out.kind).toBe("executed");
+    expect(chain.peekPositions()).toHaveLength(0);
   });
 });

@@ -38,6 +38,13 @@ export interface WalletWatcher {
   /**
    * Position detail for one pool — bin range, deposit, PnL. Only called for pools that
    * just appeared/disappeared in the diff, so cost stays proportional to activity.
+   *
+   * Resolves `null` when the READ FAILED, which is deliberately distinct from `[]`,
+   * "the wallet genuinely holds nothing here". Collapsing the two is how a datapi blip
+   * turns into a mirror opened at a guessed range instead of theirs — and, because the
+   * copied position address and lower bin are what re-center detection keys on, into a
+   * mirror that can never detect a re-center for the rest of its life. Same rule as the
+   * snapshot's `reliable` flag: a failed read is missing information, not an absence.
    */
-  getPositionsInPool(wallet: string, pool: string): Promise<WatchedPosition[]>;
+  getPositionsInPool(wallet: string, pool: string): Promise<WatchedPosition[] | null>;
 }

@@ -475,6 +475,35 @@ position has no local downside protection**: if the source wallet goes quiet or 
 stays unreachable, nothing closes it. That is why the stale-snapshot alert exists. Set the
 flag false to hand mirrors back to the normal exit rules.
 
+**Ownership: the exemption only covers mirrors a wallet is still there to own**
+(`partitionMirrorOwnership` in `domain/rules/follow-diff.ts`, added 2026-09-20). Handing a
+position's exit to a wallet is only sound while that wallet is being polled. Three things
+end that — `follow.enabled` goes off, the wallet is disabled, the wallet is removed — and
+each one used to leave a position answering to NOBODY: the follow cycle skips it, and the
+local rules had already been handed away. Both consequences are now wired:
+
+- **The cycle drains orphans by closing them** (`drainOrphans`). Unfollow means unwind.
+  It reads `follow-state.json` through `repo.load()`, never `listWallets()`, because that
+  helper answers an unreadable file with an empty array — which is exactly what a
+  deliberate unfollow looks like, so a parse error would liquidate every mirror. A failed
+  read refuses the whole tick. Same rule as the datapi `reliable` flag: **a read that
+  failed is missing information, never an instruction to exit.**
+  The drain runs AFTER the reverse reconcile (so a position already gone on-chain is
+  finalised, not closed twice) and BEFORE the `follow.enabled` early return (so turning the
+  switch off drains what the switch just orphaned). A failed drain leaves the record open
+  and retries next tick, matching the close-is-retried asymmetry below. Telegram is warned
+  BEFORE the writes, naming the cause.
+- **Management and the poller re-arm local rules over orphans** in the meantime — both
+  filter `listOpenMirrored()` through `partitionMirrorOwnership` and exempt only `owned`.
+  This is what covers the ≤`intervalSec` window before the drain, and the case where the
+  follow watcher is not running at all.
+
+> **`followEnabled: false` executes trades.** It is not a pause button: flipping it off
+> closes every open mirror. Note the flat-schema default is `false`, so restoring a config
+> that predates this feature also triggers a drain. `scheduledTick` deliberately does not
+> short-circuit on disabled for this reason — but a disabled tick with nothing to drain
+> does not consume the interval budget, so re-enabling still polls on the next base tick.
+
 **Three asymmetries carry the safety of this feature** — change them and you get either
 mass-mirroring or mass-closing:
 - **First sight seeds, never mirrors.** Cold start, re-enable and re-add all clear the
@@ -482,11 +511,18 @@ mass-mirroring or mass-closing:
 - **An unreliable snapshot suppresses CLOSES but still allows OPENS.** A truncated page
   list can hide a still-open pool; reading that as an exit would close everything on a
   transient datapi 502. It cannot invent a pool, so a newly seen pool is always genuine.
-  A degraded snapshot also never becomes the baseline.
+  A degraded snapshot also never becomes the baseline. **`reliable` covers truncation, not
+  just errors** (fixed 2026-09-20): the snapshot is trusted only when a page positively
+  reports the end of the list — `hasNext:false`, or (when that field is absent/null) a
+  page shorter than `PAGE_SIZE`. Exhausting `MAX_PAGES`, or a FULL page with no
+  continuation signal at all (the field renamed upstream), yields `reliable:false`.
+  `hasNext:false` is still trusted on a full page, so a wallet holding exactly 50 pools
+  does not become permanently unreliable — which would strand its mirrors the other way.
 - **A failed mirror-OPEN is NOT retried** (the baseline advances regardless, matching
   `deploy_position`'s `noRetry` rationale), but a failed mirror-CLOSE **is** — the record
   stays open and the source wallet is still absent from the pool, so the next tick tries
-  again. Retrying a deploy risks a double-spend; retrying a close does not.
+  again. Retrying a deploy risks a double-spend; retrying a close does not. The orphan
+  drain inherits this: a failed drain stays open and is re-attempted.
 - **Sustained degradation escalates.** Consecutive unreliable polls per wallet are counted
   in-process; at `follow.staleTicksBeforeAlert` a Telegram warning names how many mirrors
   are currently unprotected. Suppressing closes is safe against a FALSE exit but not a
@@ -497,6 +533,25 @@ so the gate list can differ: dropped = pool cooldown, base-mint cooldown, token 
 deployer blocklist; **kept** = wallet balance, max positions. It is registered in
 `ALL_TOOLS` but absent from every role list in `domain/prompt/role-tools.ts` and from
 `WRITE_TOOLS_DASHBOARD` — no LLM and no bridge caller can reach it, only the follow cycle.
+
+**A source position that cannot be READ is never guessed at** (fixed 2026-09-20).
+`WalletWatcher.getPositionsInPool` resolves `null` on a failed read and `[]` when the
+wallet genuinely holds nothing there; the two used to be the same empty array. Callers now
+split three ways, and `mirrorOpen` returns `opened | abandoned | retry` to say which:
+- **read failed → `retry`.** No deploy, and the pool is WITHHELD from the `seen` baseline
+  (same mechanism as a re-center) so the next tick reads it again. Safe to retry precisely
+  because nothing was written — the `noRetry` rule covers attempted writes, not reads that
+  never got that far. `getActiveBin` and `getWalletBalance` failures take this path too.
+- **read succeeded, empty → `abandoned`.** They left between the two polls. Baseline
+  advances. Logged at WARN, not info: the portfolio and positions endpoints are
+  contradicting each other, which is fine once and a bug if it repeats — without the warn,
+  a `/pnl` shape change would mean follow silently never mirrors again.
+- **deploy failed → `abandoned`.** Never retried (the original double-spend rationale).
+
+Before this, a datapi blip at open produced a mirror in the right pool at the wrong width
+(`fallbackBinsBelow`) with `source_position` and `source_lower_bin` both null — and since
+`detectRecenter` keys on exactly those two, that mirror could never detect a re-center for
+the rest of its life. Nothing logged it.
 
 **Sizing + range.** `planMirrorSize` takes `positionSizePct` of SOL free after
 `gasReserve`, clamped to `[minDeploySol, maxDeploySol]` — their size is irrelevant.
@@ -521,8 +576,11 @@ the dashboard Config page silently lie (save succeeds, behaviour does not change
 the next restart). If you add a follow flag, read it at use time, never at wiring time.
 
 **Management tools**: `add_follow_wallet`, `remove_follow_wallet`, `list_follow_wallets`,
-`set_follow_wallet_enabled` (in `GENERAL_TOOLS` + the dashboard allowlist). Removing a
-wallet leaves its mirrored positions OPEN and untracked — the tool reports the count.
+`set_follow_wallet_enabled` (in `GENERAL_TOOLS` + the dashboard allowlist). Removing or
+disabling a wallet CLOSES its mirrored positions on the next follow tick; both tools report
+the pending count as `mirrors_to_close`. The closes are deliberately left to the cycle
+rather than run inside the tool — one path owns close mechanics, notifications and
+retry-on-failure, and a hand-edited config then drains identically.
 
 ---
 

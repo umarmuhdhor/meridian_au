@@ -10,6 +10,7 @@ import type { FollowConfig } from "../../domain/schemas/config.js";
 import type { ManagementConfig } from "../../domain/schemas/config.js";
 import type { OnChainPosition, PositionsSnapshot } from "../../domain/schemas/chain.js";
 import { assessPnl } from "../../domain/rules/pnl.js";
+import { partitionMirrorOwnership } from "../../domain/rules/follow-diff.js";
 import { getPollerFastCut } from "../../domain/rules/close-rules.js";
 import { consolidateBaseToSol } from "./consolidate.js";
 import { enrichCloseResult } from "../../domain/format/enrich-close.js";
@@ -198,9 +199,20 @@ export function createPnlPoller(deps: PnlPollerDeps): PnlPollerHandle {
       // Drop follow-mirrored positions before any exit logic runs. Filtering here
       // rather than inside `tickPnlPoller` keeps the pure function unaware of the
       // feature, and covers BOTH paths it owns (trailing-TP and the fast-cut).
+      //
+      // Only mirrors still OWNED by a live, enabled, followed wallet are dropped. Once a
+      // mirror is orphaned — master switch off, wallet disabled, wallet removed — nobody
+      // is left to close it, so the fast-cut and trailing-TP take it back. The follow
+      // cycle closes orphans outright; this covers the gap until it does.
       const followHeld =
         deps.followRepo && deps.followConfig?.exclusiveExit
-          ? new Set((await deps.followRepo.listOpenMirrored()).map((m) => m.position))
+          ? new Set(
+              partitionMirrorOwnership({
+                followEnabled: deps.followConfig.enabled,
+                wallets: await deps.followRepo.listWallets(),
+                openMirrors: await deps.followRepo.listOpenMirrored(),
+              }).owned.map((m) => m.position),
+            )
           : new Set<string>();
       const eligible =
         followHeld.size > 0

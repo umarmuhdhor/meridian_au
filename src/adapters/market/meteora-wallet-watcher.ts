@@ -46,7 +46,11 @@ const PortfolioPoolSchema = z
 const PortfolioResponseSchema = z
   .object({
     pools: z.array(PortfolioPoolSchema).default([]),
-    hasNext: z.boolean().optional(),
+    /**
+     * Nullable as well as optional: absent and null both mean "no continuation signal",
+     * which `getOpenPools` treats as ambiguous rather than as the end of the list.
+     */
+    hasNext: z.boolean().nullable().optional(),
   })
   .passthrough();
 
@@ -146,6 +150,14 @@ export function createMeteoraWalletWatcher(opts: MeteoraWalletWatcherOptions): W
       const pools: string[] = [];
       const positions: WatchedPosition[] = [];
       let reliable = true;
+      /**
+       * Set only when a page tells us, positively, that nothing follows it. Paging that
+       * merely STOPS — because the page cap ran out, or because the continuation field
+       * vanished from a full page — leaves this false, and a pool list that may be
+       * missing entries must not be trusted: the diff would read every unseen pool as
+       * an exit and close those mirrors.
+       */
+      let sawEndOfList = false;
 
       for (let page = 1; page <= MAX_PAGES; page++) {
         const url =
@@ -176,20 +188,52 @@ export function createMeteoraWalletWatcher(opts: MeteoraWalletWatcherOptions): W
             pnl_pct: null,
           });
         }
-        if (parsed.data.hasNext !== true) break;
+
+        const hasNext = parsed.data.hasNext;
+        if (hasNext === true) continue;
+        if (hasNext === false) {
+          // Authoritative. A wallet holding exactly PAGE_SIZE pools ends here, and
+          // saying so is what stops that wallet from being permanently unreliable.
+          sawEndOfList = true;
+          break;
+        }
+        // No continuation signal at all. A SHORT page still ends the list under any
+        // sane pagination. A FULL one does not: the field may have been renamed
+        // upstream, so keep paging and let a later short page — or the cap — decide.
+        if (parsed.data.pools.length < PAGE_SIZE) {
+          sawEndOfList = true;
+          break;
+        }
+      }
+
+      if (reliable && !sawEndOfList) {
+        // Every page we asked for came back, and none of them said it was the last.
+        // The list is probably truncated, and a truncated list that is TRUSTED is the
+        // mass-false-exit case the `reliable` flag exists to prevent.
+        opts.logger.warn(
+          "follow-watch",
+          `pool list never reported an end after ${MAX_PAGES} pages — treating the snapshot as unreliable so the missing pools are not read as exits`,
+          { wallet, collected: pools.length },
+        );
+        reliable = false;
       }
 
       return { wallet, pools, positions, reliable };
     },
 
-    async getPositionsInPool(wallet: string, pool: string): Promise<WatchedPosition[]> {
+    async getPositionsInPool(wallet: string, pool: string): Promise<WatchedPosition[] | null> {
       const url =
         `${baseUrl}/positions/${encodeURIComponent(pool)}/pnl` +
         `?user=${encodeURIComponent(wallet)}&status=open&page=1&pageSize=100`;
       const body = await getJson(url);
-      if (body == null) return [];
+      // null, not [] — see the port. An HTTP/timeout failure says nothing about what
+      // they hold, and the caller must be able to tell that apart from an empty pool.
+      if (body == null) return null;
       const parsed = PnlResponseSchema.safeParse(body);
-      if (!parsed.success) return [];
+      if (!parsed.success) {
+        opts.logger.warn("follow-watch", "position body did not match schema", { wallet, pool });
+        return null;
+      }
       const rows = parsed.data.positions ?? parsed.data.data ?? [];
       return rows.map((r) => normalizePosition(pool, null, null, r));
     },

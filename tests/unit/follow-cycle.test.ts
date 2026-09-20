@@ -308,7 +308,7 @@ describe("runFollowCycle", () => {
     expect(await repo.listMirrored()).toEqual([]);
   });
 
-  it("still enforces maxPositions", async () => {
+  it("still enforces maxPositions — capped before the write is attempted", async () => {
     const full = [
       openPosition({ position: "p1", pool: "poolX" }),
       openPosition({ position: "p2", pool: "poolY" }),
@@ -324,7 +324,10 @@ describe("runFollowCycle", () => {
       repo,
     });
     expect(r.opened).toBe(0);
-    expect(r.failures).toBe(1);
+    // The capacity check now rejects it up front, so no deploy is attempted and this
+    // is not counted as a failure — but `maxPositionsGate` remains the backstop.
+    expect(r.capped).toBe(1);
+    expect(r.failures).toBe(0);
     expect(await repo.listMirrored()).toEqual([]);
   });
 

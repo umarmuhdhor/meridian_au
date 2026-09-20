@@ -448,9 +448,22 @@ for bin range + deposit + PnL.
    nothing else would ever close).
 2. Per enabled wallet: snapshot their open pools → `diffFollowedWallet`
    (`domain/rules/follow-diff.ts`, pure).
-3. **Closes run before opens** so an intra-tick rotation frees its `maxPositions` slot first.
-4. mirror-open → `follow_deploy_position` via `executeTool`; mirror-close → `close_position`.
-5. advance the per-wallet `seen` baseline.
+3. **Re-center detection** (`detectRecenter`, gated on `mirrorRecenter` + a reliable
+   snapshot): for each mirror whose pool the wallet is STILL in, compare their current
+   position against what we copied. Their recorded position address gone, or their lower
+   bin drifted past `recenterBinThreshold`, means they closed and reopened in place —
+   invisible to a pool-membership diff. We close, and withhold that pool from the
+   baseline so the next tick re-mirrors at the new range (re-opening in the same tick
+   would race the just-closed position still showing on-chain). This matters because
+   `exclusiveExit` disabled the OOR rule that used to clean up a stranded range.
+4. **Closes run before opens** so an intra-tick rotation frees its `maxPositions` slot first.
+5. opens are bounded by `mirrorCapacity` — `min(maxPositions - ourOpen, maxMirrored -
+   openMirrors)`. Mirrors have no local exit, so without their own cap they hold every
+   portfolio slot indefinitely; `maxMirrored` (default 2 against `maxPositions` 3)
+   reserves the remainder for the screener, and the screening cycle's max-positions skip
+   now names how many slots follow is holding.
+6. mirror-open → `follow_deploy_position` via `executeTool`; mirror-close → `close_position`.
+7. advance the per-wallet `seen` baseline.
 
 **`follow.exclusiveExit` (default TRUE) — the followed wallet owns the exit.** Mirrored
 positions are exempt from EVERY local close rule: the management cycle forces their
@@ -561,7 +574,9 @@ a separate host bind mount at `/app/user-config.json` — see `deploy/OPERATIONS
 - **Follow-the-wallet keys** (`follow`, added 2026-09-20): `followEnabled` (false),
   `followIntervalSec` (45), `followPositionSizePct` (0.35), `followMinDeploySol` (0.05),
   `followMaxDeploySol` (1), `followMinBinsBelow` (20), `followMaxBinsBelow` (120),
-  `followFallbackBinsBelow` (55), `followStrategy` (spot), `followLearnEnabled` (true).
+  `followFallbackBinsBelow` (55), `followStrategy` (spot), `followLearnEnabled` (true),
+  `followExclusiveExit` (true), `followStaleTicksBeforeAlert` (5), `followMaxMirrored` (2),
+  `followMirrorRecenter` (true), `followRecenterBinThreshold` (10).
   Surfaced on the dashboard Config page under a **Follow wallet** tab. Any NEW field on a persisted schema MUST be `.optional()`/`.default()`
   or old `state.json`/`lessons.json` fail to load — see § Known issues.
 

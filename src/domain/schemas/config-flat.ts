@@ -145,6 +145,9 @@ export const FlatUserConfigSchema = z
     followStrategy: z.enum(["spot", "curve", "bid_ask"]).default("spot"),
     followExclusiveExit: z.boolean().default(true),
     followStaleTicksBeforeAlert: z.number().int().min(1).default(5),
+    followMaxMirrored: z.number().int().min(1).default(2),
+    followMirrorRecenter: z.boolean().default(true),
+    followRecenterBinThreshold: z.number().int().min(1).default(10),
     followLearnEnabled: z.boolean().default(true),
 
     // llm

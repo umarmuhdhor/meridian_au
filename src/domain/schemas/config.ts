@@ -164,6 +164,20 @@ export const FollowConfigSchema = z.object({
   exclusiveExit: z.boolean().default(true),
   /** Consecutive degraded snapshots for one wallet before an alert is raised. */
   staleTicksBeforeAlert: z.number().int().min(1).default(5),
+  /**
+   * Cap on concurrent mirrors, independent of risk.maxPositions. Mirrors have no local
+   * exit under `exclusiveExit`, so without their own cap they can hold every portfolio
+   * slot indefinitely and starve screening. Keep it below maxPositions to reserve room.
+   */
+  maxMirrored: z.number().int().min(1).default(2),
+  /**
+   * Close and re-mirror when the followed wallet re-centers inside a pool it stays in.
+   * A pool-membership diff cannot see that on its own, and `exclusiveExit` has disabled
+   * the out-of-range rule that used to clean up the stranded range.
+   */
+  mirrorRecenter: z.boolean().default(true),
+  /** Bin drift below which a range change is treated as noise, not a re-center. */
+  recenterBinThreshold: z.number().int().min(1).default(10),
   /** Run the entry/exit retrospective and write a lesson after each mirrored close. */
   learnEnabled: z.boolean().default(true),
 });

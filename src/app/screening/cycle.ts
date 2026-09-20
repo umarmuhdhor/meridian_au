@@ -275,11 +275,29 @@ export async function runScreeningCycle(deps: ScreeningCycleDeps): Promise<Scree
     ]);
 
   if (positionsSnap.total_positions >= ctx.config.risk.maxPositions) {
-    const shortReason = `at max positions (${positionsSnap.total_positions}/${ctx.config.risk.maxPositions})`;
-    const humanReason = formatMaxPositionsReason(
-      positionsSnap.total_positions,
-      ctx.config.risk.maxPositions,
-    );
+    // Name the follow feature when it is the reason the screener is boxed out.
+    // Mirrors have no local exit under `follow.exclusiveExit`, so they can hold slots
+    // indefinitely — without this the log just repeats "at max positions" forever with
+    // no hint of where the capacity went, or that follow.maxMirrored is the knob.
+    let followHeld = 0;
+    try {
+      const onChain = new Set(positionsSnap.positions.map((p) => p.position));
+      followHeld = (await ctx.repos.follow?.listOpenMirrored() ?? []).filter((m) =>
+        onChain.has(m.position),
+      ).length;
+    } catch {
+      // non-fatal — this is diagnostics, never a gate
+    }
+    const followNote =
+      followHeld > 0
+        ? ` — ${followHeld} of them held by follow-the-wallet (cap: follow.maxMirrored=${ctx.config.follow?.maxMirrored ?? "?"})`
+        : "";
+    const shortReason = `at max positions (${positionsSnap.total_positions}/${ctx.config.risk.maxPositions})${followNote}`;
+    const humanReason =
+      formatMaxPositionsReason(positionsSnap.total_positions, ctx.config.risk.maxPositions) +
+      (followHeld > 0
+        ? ` ${followHeld} position(s) are follow mirrors, which do not close on local exit rules — lower follow.maxMirrored to reserve room for screening.`
+        : "");
     await ctx.repos.decisions.append({
       id: nextDecisionId(ctx.clock.now()),
       ts: ctx.clock.now().toISOString(),
@@ -292,7 +310,11 @@ export async function runScreeningCycle(deps: ScreeningCycleDeps): Promise<Scree
       ),
       reason: sanitizeDecisionText(humanReason, 500),
       risks: [],
-      metrics: { total_positions: positionsSnap.total_positions, max: ctx.config.risk.maxPositions },
+      metrics: {
+        total_positions: positionsSnap.total_positions,
+        max: ctx.config.risk.maxPositions,
+        ...(followHeld > 0 ? { follow_held: followHeld } : {}),
+      },
       rejected: [],
     });
     ctx.logger.info("screening", `skipped — ${shortReason}`);

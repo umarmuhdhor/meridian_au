@@ -81,5 +81,8 @@
   "followStrategy": "spot",
   "followLearnEnabled": true,
   "followExclusiveExit": true,
-  "followStaleTicksBeforeAlert": 5
+  "followStaleTicksBeforeAlert": 5,
+  "followMaxMirrored": 2,
+  "followMirrorRecenter": true,
+  "followRecenterBinThreshold": 10
 }

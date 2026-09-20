@@ -103,6 +103,9 @@ export function flatToNested(flat: FlatUserConfig): AppConfig {
       strategy: flat.followStrategy,
       exclusiveExit: flat.followExclusiveExit,
       staleTicksBeforeAlert: flat.followStaleTicksBeforeAlert,
+      maxMirrored: flat.followMaxMirrored,
+      mirrorRecenter: flat.followMirrorRecenter,
+      recenterBinThreshold: flat.followRecenterBinThreshold,
       learnEnabled: flat.followLearnEnabled,
     },
     llm: {
@@ -178,6 +181,9 @@ export function nestedToFlat(nested: AppConfig): Partial<FlatUserConfig> {
     followStrategy: nested.follow.strategy,
     followExclusiveExit: nested.follow.exclusiveExit,
     followStaleTicksBeforeAlert: nested.follow.staleTicksBeforeAlert,
+    followMaxMirrored: nested.follow.maxMirrored,
+    followMirrorRecenter: nested.follow.mirrorRecenter,
+    followRecenterBinThreshold: nested.follow.recenterBinThreshold,
     followLearnEnabled: nested.follow.learnEnabled,
   };
 }

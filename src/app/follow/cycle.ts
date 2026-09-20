@@ -6,7 +6,13 @@ import type { AppContext } from "../tools/context.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { FollowedWallet, MirroredPosition } from "../../domain/schemas/follow-wallet.js";
 import type { DeployResult, CloseResult } from "../../domain/schemas/chain.js";
-import { diffFollowedWallet, planMirrorRange, planMirrorSize } from "../../domain/rules/follow-diff.js";
+import {
+  detectRecenter,
+  diffFollowedWallet,
+  mirrorCapacity,
+  planMirrorRange,
+  planMirrorSize,
+} from "../../domain/rules/follow-diff.js";
 import { executeTool } from "../tools/execute.js";
 import { captureTechnicals, runFollowRetrospective } from "./learn.js";
 
@@ -44,6 +50,10 @@ export interface FollowCycleResult {
   failures: number;
   /** Mirror records finalised because their position was already gone on-chain. */
   reconciled: number;
+  /** Mirrors closed because the source wallet re-centered inside the same pool. */
+  recentered: number;
+  /** Opens dropped this tick because no mirror slot was free. */
+  capped: number;
 }
 
 const short = (s: string): string => `${s.slice(0, 8)}…`;
@@ -95,6 +105,8 @@ export async function runFollowCycle(deps: FollowCycleDeps): Promise<FollowCycle
     closed: 0,
     failures: 0,
     reconciled: 0,
+    recentered: 0,
+    capped: 0,
   };
 
   if (!ctx.config.follow.enabled) return { ...result, kind: "disabled" };
@@ -147,6 +159,10 @@ export async function runFollowCycle(deps: FollowCycleDeps): Promise<FollowCycle
       `reconciled orphaned mirror ${short(m.position)} in ${m.pool_name ?? short(m.pool)} as closed`,
     );
   }
+
+  // Running count for the capacity check — reconcile has already run, so this is the
+  // true number of live mirrors. Adjusted as we open and close within the tick.
+  let openMirrorCount = (await repo.listOpenMirrored()).length;
 
   for (const wallet of wallets) {
     const snapshot = await watcher.getOpenPools(wallet.address);
@@ -204,16 +220,74 @@ export async function runFollowCycle(deps: FollowCycleDeps): Promise<FollowCycle
       ctx.logger.info("follow", `skip ${short(skip.pool)} — ${skip.reason}`);
     }
 
+    // Re-center detection — only for pools they are STILL in (an exit is the pool-set
+    // diff's job) and only on a snapshot we trust. Costs one datapi call per open mirror.
+    const recenteredPools: string[] = [];
+    if (ctx.config.follow.mirrorRecenter && snapshot.reliable) {
+      const currentSet = new Set(snapshot.pools);
+      for (const m of openMirrors) {
+        if (!currentSet.has(m.pool)) continue; // exit — handled by diff.closes
+        const theirs = await watcher.getPositionsInPool(wallet.address, m.pool);
+        const verdict = detectRecenter({
+          recordedSourcePosition: m.source_position,
+          recordedSourceLowerBin: m.source_lower_bin,
+          current: theirs,
+          thresholdBins: ctx.config.follow.recenterBinThreshold,
+        });
+        if (!verdict.recentered) continue;
+        ctx.logger.info(
+          "follow",
+          `${wallet.label || short(wallet.address)} re-centered in ${m.pool_name ?? short(m.pool)} — ${verdict.reason}`,
+        );
+        const ok = await mirrorClose(deps, wallet, m, `re-centered: ${verdict.reason}`);
+        if (ok) {
+          result.recentered++;
+          openMirrorCount--;
+          ourPools = ourPools.filter((p) => p !== m.pool);
+          // Drop the pool from the baseline so the NEXT tick reads it as a fresh entry
+          // and re-mirrors at their new range. Re-opening in this same tick would race
+          // the just-closed position still showing in the on-chain snapshot.
+          recenteredPools.push(m.pool);
+        } else {
+          result.failures++;
+        }
+      }
+    }
+
     for (const mirror of diff.closes) {
       const ok = await mirrorClose(deps, wallet, mirror);
-      if (ok) result.closed++;
-      else result.failures++;
+      if (ok) {
+        result.closed++;
+        openMirrorCount--;
+        ourPools = ourPools.filter((p) => p !== mirror.pool);
+      } else {
+        result.failures++;
+      }
     }
 
     for (const pool of diff.opens) {
+      const capacity = mirrorCapacity({
+        ourOpenCount: ourPools.length,
+        maxPositions: ctx.config.risk.maxPositions,
+        openMirrorCount,
+        maxMirrored: ctx.config.follow.maxMirrored,
+      });
+      if (capacity.slots <= 0) {
+        result.capped++;
+        ctx.logger.warn(
+          "follow",
+          `no slot for ${short(pool)} from ${wallet.label || short(wallet.address)} — ` +
+            (capacity.blockedBy === "max_mirrored"
+              ? `at follow.maxMirrored (${openMirrorCount}/${ctx.config.follow.maxMirrored})`
+              : `at risk.maxPositions (${ourPools.length}/${ctx.config.risk.maxPositions})`) +
+            ". This entry is skipped and NOT retried.",
+        );
+        continue;
+      }
       const ok = await mirrorOpen(deps, wallet, pool);
       if (ok) {
         result.opened++;
+        openMirrorCount++;
         ourPools.push(pool);
       } else {
         result.failures++;
@@ -224,7 +298,14 @@ export async function runFollowCycle(deps: FollowCycleDeps): Promise<FollowCycle
     // succeeded. A failed open is NOT retried on the next tick: retrying a write that
     // may have partially landed is how double-deploys happen, and it is why
     // deploy_position itself is `noRetry`. The failure is logged and notified instead.
-    if (diff.nextSeen != null) await repo.setSeen(wallet.address, diff.nextSeen);
+    // Re-centered pools are withheld so the next tick treats them as new entries.
+    if (diff.nextSeen != null) {
+      const next =
+        recenteredPools.length > 0
+          ? diff.nextSeen.filter((p) => !recenteredPools.includes(p))
+          : diff.nextSeen;
+      await repo.setSeen(wallet.address, next);
+    }
   }
 
   return result;
@@ -401,10 +482,14 @@ async function mirrorClose(
   deps: FollowCycleDeps,
   wallet: FollowedWallet,
   mirror: MirroredPosition,
+  reasonOverride?: string,
 ): Promise<boolean> {
   const { ctx, registry, repo, watcher } = deps;
   const label = wallet.label || short(wallet.address);
-  const reason = `follow: ${label} exited ${mirror.pool_name ?? short(mirror.pool)}`;
+  const reason =
+    reasonOverride != null
+      ? `follow: ${label} ${reasonOverride} in ${mirror.pool_name ?? short(mirror.pool)}`
+      : `follow: ${label} exited ${mirror.pool_name ?? short(mirror.pool)}`;
 
   // Their final PnL, best-effort — the position is gone from the open list, so this
   // is only available when datapi still serves it. Absence is expected, not an error.
@@ -447,7 +532,7 @@ async function mirrorClose(
     );
     await ctx.notifier.notify(
       "warn",
-      `follow: ${label} exited ${mirror.pool_name ?? short(mirror.pool)} but our close FAILED — ${detail}. Position still open.`,
+      `follow: could NOT close our mirror of ${mirror.pool_name ?? short(mirror.pool)} — ${detail}. Position still open. (${reason})`,
     );
     return false;
   }
@@ -521,6 +606,8 @@ export function createFollowWatcher(deps: FollowWatcherDeps): FollowWatcherHandl
     closed: 0,
     failures: 0,
     reconciled: 0,
+    recentered: 0,
+    capped: 0,
   });
 
   const run = async (): Promise<FollowCycleResult> => {

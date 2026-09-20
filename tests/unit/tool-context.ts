@@ -43,6 +43,9 @@ const cfg = {
     strategy: "spot",
     exclusiveExit: true,
     staleTicksBeforeAlert: 5,
+    maxMirrored: 2,
+    mirrorRecenter: true,
+    recenterBinThreshold: 10,
     learnEnabled: true,
   },
 } as unknown as AppConfig;

@@ -211,3 +211,110 @@ export function planMirrorRange(input: MirrorRangeInput): MirrorRangeResult {
     clampedFrom: clamped === width ? null : width,
   };
 }
+
+export interface RecenterInput {
+  /** Their position address at the time we mirrored, when datapi exposed it. */
+  recordedSourcePosition: string | null;
+  /** Their lower bin at the time we mirrored. */
+  recordedSourceLowerBin: number | null;
+  /** What they hold in that pool right now. */
+  current: readonly {
+    position: string | null;
+    lower_bin: number | null;
+  }[];
+  /** Bin drift below which a range change is treated as noise. */
+  thresholdBins: number;
+}
+
+export type RecenterVerdict =
+  | { recentered: false; reason: null }
+  | { recentered: true; reason: string };
+
+/**
+ * Did the followed wallet re-center inside a pool it is still in?
+ *
+ * A pool-membership diff cannot see this: they close and reopen in the SAME pool, so the
+ * pool never leaves their set and no open/close signal fires. Meanwhile our mirror keeps
+ * the old range — and under `follow.exclusiveExit` the out-of-range rule that used to
+ * clean this up has been switched off, so the position can sit outside the active range
+ * earning nothing until they abandon the pool entirely.
+ *
+ * Two independent signals, either sufficient:
+ *   - the specific position we copied is no longer in their list (unambiguous: that
+ *     position was closed), or
+ *   - their lower bin has moved by more than `thresholdBins`.
+ *
+ * The threshold exists because `current` may hold several positions and the "widest"
+ * pick can flip between polls; a bin or two of churn is not a re-center. Missing data
+ * on either side yields `false` — fail-quiet, since the cost of a false positive here
+ * is a needless close-and-reopen with real fees.
+ */
+export function detectRecenter(input: RecenterInput): RecenterVerdict {
+  const { recordedSourcePosition, recordedSourceLowerBin, current, thresholdBins } = input;
+  if (current.length === 0) {
+    // They hold nothing in this pool. That is an EXIT, which the pool-set diff owns —
+    // reporting it as a re-center here would double-handle it.
+    return { recentered: false, reason: null };
+  }
+
+  if (recordedSourcePosition != null) {
+    const stillThere = current.some((p) => p.position === recordedSourcePosition);
+    if (!stillThere) {
+      return {
+        recentered: true,
+        reason: `their position ${recordedSourcePosition.slice(0, 8)}… is gone while they remain in the pool`,
+      };
+    }
+    // The copied position is still open — whatever else they hold is an addition,
+    // not a re-center of the range we are mirroring.
+    return { recentered: false, reason: null };
+  }
+
+  if (recordedSourceLowerBin == null) return { recentered: false, reason: null };
+  const lowerBins = current.map((p) => p.lower_bin).filter((b): b is number => b != null);
+  if (lowerBins.length === 0) return { recentered: false, reason: null };
+
+  // Closest current position to what we copied — if ANY of their positions still sits
+  // near the old range, they have not moved off it.
+  const drift = Math.min(...lowerBins.map((b) => Math.abs(b - recordedSourceLowerBin)));
+  if (drift > thresholdBins) {
+    return {
+      recentered: true,
+      reason: `their lower bin moved ${drift} bins from ${recordedSourceLowerBin} (threshold ${thresholdBins})`,
+    };
+  }
+  return { recentered: false, reason: null };
+}
+
+export interface MirrorCapacityInput {
+  /** Open positions we hold right now, from every source. */
+  ourOpenCount: number;
+  maxPositions: number;
+  /** Open mirrors we hold right now. */
+  openMirrorCount: number;
+  /** Cap on concurrent mirrors, so follow cannot consume the whole portfolio. */
+  maxMirrored: number;
+}
+
+export interface MirrorCapacity {
+  slots: number;
+  /** Set when slots is 0 — which limit bit, for the log. */
+  blockedBy: "max_positions" | "max_mirrored" | null;
+}
+
+/**
+ * How many new mirrors may be opened this tick.
+ *
+ * Follow positions have no local exit under `follow.exclusiveExit`, so without a cap of
+ * their own they can hold every `maxPositions` slot indefinitely and silently starve
+ * screening — which would just keep logging "at max positions" with no hint that follow
+ * is the reason. `maxMirrored` reserves the remainder for the screener.
+ */
+export function mirrorCapacity(input: MirrorCapacityInput): MirrorCapacity {
+  const { ourOpenCount, maxPositions, openMirrorCount, maxMirrored } = input;
+  const portfolioSlots = Math.max(0, maxPositions - ourOpenCount);
+  const mirrorSlots = Math.max(0, maxMirrored - openMirrorCount);
+  const slots = Math.min(portfolioSlots, mirrorSlots);
+  if (slots > 0) return { slots, blockedBy: null };
+  return { slots: 0, blockedBy: mirrorSlots <= 0 ? "max_mirrored" : "max_positions" };
+}

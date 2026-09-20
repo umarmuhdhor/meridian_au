@@ -8,6 +8,7 @@ export const READ_TOOLS = new Set<string>([
   "get_top_candidates", "get_pool_detail", "get_pool_kline", "get_active_bin", "get_pool_memory",
   "get_recent_decisions", "get_performance_history", "list_lessons", "list_strategies",
   "list_smart_wallets", "list_blacklist", "list_blocked_deployers", "check_smart_wallets_on_pool",
+  "list_follow_wallets",
 ]);
 
 // Read-only surface for the dashboard chat (M5, Fase A). Passed to runAgentLoop as
@@ -27,6 +28,9 @@ export const WRITE_TOOLS_DASHBOARD = new Set<string>([
   "add_lesson", "pin_lesson", "unpin_lesson", "clear_lessons", "add_strategy", "remove_strategy",
   "set_active_strategy", "update_config", "add_to_blacklist", "remove_from_blacklist",
   "add_smart_wallet", "remove_smart_wallet", "block_deployer", "unblock_deployer",
+  // Follow-the-wallet management. `follow_deploy_position` is deliberately ABSENT:
+  // the mirror write is reachable only from the follow cycle, never from the bridge.
+  "add_follow_wallet", "remove_follow_wallet", "set_follow_wallet_enabled",
 ]);
 
 // :name → file at the state dir (GET /state/file/:name). user-config is redacted before send.
@@ -40,6 +44,7 @@ export const FILE_WHITELIST: Record<string, string> = {
   "token-blacklist": "token-blacklist.json",
   "dev-blocklist": "dev-blocklist.json",
   "state": "state.json",
+  "follow-state": "follow-state.json",
   "user-config": "user-config.json",
 };
 

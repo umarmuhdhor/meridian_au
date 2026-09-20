@@ -132,6 +132,19 @@ export const FlatUserConfigSchema = z
     minTokenAgeHours: z.number().nonnegative().nullable().default(null),
     maxTokenAgeHours: z.number().nonnegative().nullable().default(null),
 
+    // follow-the-wallet — see FollowConfigSchema for semantics. All defaulted so an
+    // existing user-config.json picks them up at boot without a manual edit.
+    followEnabled: z.boolean().default(false),
+    followIntervalSec: z.number().int().min(15).max(3600).default(45),
+    followPositionSizePct: z.number().positive().max(1).default(0.35),
+    followMinDeploySol: z.number().positive().default(0.05),
+    followMaxDeploySol: z.number().positive().default(1),
+    followMinBinsBelow: z.number().int().min(1).default(20),
+    followMaxBinsBelow: z.number().int().min(1).max(400).default(120),
+    followFallbackBinsBelow: z.number().int().min(1).max(400).default(55),
+    followStrategy: z.enum(["spot", "curve", "bid_ask"]).default("spot"),
+    followLearnEnabled: z.boolean().default(true),
+
     // llm
     temperature: z.number().min(0).default(0.373),
     maxTokens: z.number().int().positive().default(4096),

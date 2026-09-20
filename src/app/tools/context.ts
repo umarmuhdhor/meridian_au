@@ -8,6 +8,7 @@ import type { StrategyRepo } from "../../ports/strategy-repo.js";
 import type { SmartWalletRepo } from "../../ports/smart-wallet-repo.js";
 import type { TokenBlacklistRepo } from "../../ports/token-blacklist-repo.js";
 import type { DevBlocklistRepo } from "../../ports/dev-blocklist-repo.js";
+import type { FollowRepo } from "../../ports/follow-repo.js";
 import type { ChainClient } from "../../ports/chain-client.js";
 import type { SwapClient } from "../../ports/swap-client.js";
 import type { Notifier } from "../../ports/notifier.js";
@@ -51,6 +52,8 @@ export interface AppContext {
     smartWallets: SmartWalletRepo;
     tokenBlacklist: TokenBlacklistRepo;
     devBlocklist: DevBlocklistRepo;
+    /** Followed wallets + mirror records for the follow-the-wallet feature. */
+    follow: FollowRepo;
   };
   /**
    * Per-call attribution for deploy/close post-hooks. Set by the caller

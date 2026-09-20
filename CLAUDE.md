@@ -288,6 +288,7 @@ Scheduled in `main()` (autonomous mode) via `createIntervalScheduler`:
 | health | `healthCheckIntervalMin` | `runHealthCycle` (`src/app/health/cycle.ts:24`) |
 | briefing | 24h (hardcoded) | `runBriefingCycle` (`src/app/briefing/cycle.ts:16`) |
 | hivemind-sync | 15m (hardcoded) | `createHiveMindSync` (`src/app/hivemind/sync.ts:38`) |
+| follow | `follow.intervalSec` (45s) | `createFollowWatcher` (`src/app/follow/cycle.ts`) — only scheduled when `follow.enabled` |
 
 The scheduler skips overlapping ticks per label (the `_busy` guard is built in).
 
@@ -423,6 +424,61 @@ becomes the *attention* threshold (not a hard close) in smart mode.
 
 ---
 
+## Follow-the-wallet (`follow.enabled`, 2026-09-20)
+
+Copy-trading. Meridian mirrors a chosen wallet's DLMM entries and exits, **deliberately
+bypassing screening, the TA gate, pool/token cooldowns and both blacklists** — the user's
+judgement about the wallet replaces the bot's judgement about the pool. Two switches must
+both be on: `follow.enabled` (global) and `enabled` on the individual wallet.
+
+**Reading the other wallet** — NOT via `getMyPositions` (see § Known issues: its
+`wallet_address` option is ignored). The `WalletWatcher` port
+(`adapters/market/meteora-wallet-watcher.ts`) hits Meteora's public datapi, no RPC and no
+SDK: `GET /portfolio/open?user=<w>` for the pool set, `GET /positions/<pool>/pnl?user=<w>`
+for bin range + deposit + PnL.
+
+**The cycle** (`src/app/follow/cycle.ts`) per enabled wallet:
+1. snapshot their open pools → `diffFollowedWallet` (`domain/rules/follow-diff.ts`, pure).
+2. **closes run before opens** so an intra-tick rotation frees its `maxPositions` slot first.
+3. mirror-open → `follow_deploy_position` via `executeTool`; mirror-close → `close_position`.
+4. advance the per-wallet `seen` baseline.
+
+**Three asymmetries carry the safety of this feature** — change them and you get either
+mass-mirroring or mass-closing:
+- **First sight seeds, never mirrors.** Cold start, re-enable and re-add all clear the
+  baseline, so none of them back-fill positions the wallet already holds.
+- **An unreliable snapshot suppresses CLOSES but still allows OPENS.** A truncated page
+  list can hide a still-open pool; reading that as an exit would close everything on a
+  transient datapi 502. It cannot invent a pool, so a newly seen pool is always genuine.
+  A degraded snapshot also never becomes the baseline.
+- **A failed mirror is NOT retried.** The baseline advances regardless, matching
+  `deploy_position`'s `noRetry` rationale. Failures are logged and pushed to Telegram.
+
+**Gates** — `follow_deploy_position` is a separate tool from `deploy_position` precisely
+so the gate list can differ: dropped = pool cooldown, base-mint cooldown, token blacklist,
+deployer blocklist; **kept** = wallet balance, max positions. It is registered in
+`ALL_TOOLS` but absent from every role list in `domain/prompt/role-tools.ts` and from
+`WRITE_TOOLS_DASHBOARD` — no LLM and no bridge caller can reach it, only the follow cycle.
+
+**Sizing + range.** `planMirrorSize` takes `positionSizePct` of SOL free after
+`gasReserve`, clamped to `[minDeploySol, maxDeploySol]` — their size is irrelevant.
+`planMirrorRange` can only mirror the **depth below the active bin**
+(`activeBin - theirLowerBin`): `planDeploy` supports single-side SOL only, which pins the
+upper bound to the active bin. Copied widths may fall under the 35-bin screener floor, so
+`DeployArgs.allow_tiny_range` waives `MIN_SAFE_BINS_BELOW` on this path ONLY.
+
+**Learning** (`src/app/follow/learn.ts`). Entry technicals are captured at mirror-open and
+exit technicals at mirror-close, both persisted on the mirror record. With
+`followLearnEnabled`, the close then asks the LLM to infer why the wallet entered and
+exited and writes a `[follow:<label>] …` lesson tagged `follow` + `wallet:<prefix>`, which
+flows into future prompts through the normal `── LESSONS ──` block.
+
+**Management tools**: `add_follow_wallet`, `remove_follow_wallet`, `list_follow_wallets`,
+`set_follow_wallet_enabled` (in `GENERAL_TOOLS` + the dashboard allowlist). Removing a
+wallet leaves its mirrored positions OPEN and untracked — the tool reports the count.
+
+---
+
 ## Persistent files (JSON at `STATE_DIR`, atomic writes)
 
 | File | Repo | Owns |
@@ -435,6 +491,7 @@ becomes the *attention* threshold (not a hard close) in smart mode.
 | `smart-wallets.json` | smart-wallet-repo | tracked KOL/alpha wallets (type lp\|holder) |
 | `token-blacklist.json` | token-blacklist-repo | mint → reason |
 | `dev-blocklist.json` | dev-blocklist-repo | deployer wallet → reason |
+| `follow-state.json` | follow-repo | followed wallets + per-wallet last-seen pool set + mirror records (capped 200, closed pruned first) |
 | `user-config.json` | config-repo | the live config (loaded → nested `AppConfig`) |
 
 All writes are temp-file + fsync + atomic rename **except `user-config.json`**, which is
@@ -466,7 +523,12 @@ a separate host bind mount at `/app/user-config.json` — see `deploy/OPERATIONS
   `dyingAtrCollapsePct` (10), `healthyFeeVelocityMin` (12), `sageExitEnabled` (false),
   `sageExitCooldownMin` (20). **Entry key** (`screening`): `maxFromHighPct` (35).
   All have flat-schema defaults, so a live config missing them gets the defaults at boot
-  (no manual edit). Any NEW field on a persisted schema MUST be `.optional()`/`.default()`
+  (no manual edit).
+- **Follow-the-wallet keys** (`follow`, added 2026-09-20): `followEnabled` (false),
+  `followIntervalSec` (45), `followPositionSizePct` (0.35), `followMinDeploySol` (0.05),
+  `followMaxDeploySol` (1), `followMinBinsBelow` (20), `followMaxBinsBelow` (120),
+  `followFallbackBinsBelow` (55), `followStrategy` (spot), `followLearnEnabled` (true).
+  Surfaced on the dashboard Config page under a **Follow wallet** tab. Any NEW field on a persisted schema MUST be `.optional()`/`.default()`
   or old `state.json`/`lessons.json` fail to load — see § Known issues.
 
 ---
@@ -548,6 +610,12 @@ retired; env backups on the host at `~/meridian/.env.bak-sagebot-*`. See
 ## Known issues / gotchas (verified against the code)
 
 - **`DRY_RUN` is not a gate** in TS — only `MERIDIAN_CHAIN` + `MERIDIAN_WRITE_UNSAFE`.
+- **`GetPositionsOptions.wallet_address` is accepted but IGNORED by the Meteora adapter.**
+  `client.ts` `fetchPositionsSnapshot` always builds the pubkey from `wallet.address`
+  (the daemon's own keypair), so `get_wallet_positions({wallet_address: X})` silently
+  returns OUR positions, not X's. Reading a foreign wallet goes through the
+  `WalletWatcher` port (`adapters/market/meteora-wallet-watcher.ts`) instead — that is
+  why follow-the-wallet does not reuse `getMyPositions`.
 - **Config path vs web read-path divergence**: the daemon loads config from cwd
   (`/app/user-config.json`), but the web container reads `MERIDIAN_ROOT=/opt/data`.
   `docker-compose.yml` bind-mounts the same host config file into the web container
@@ -635,6 +703,9 @@ retired; env backups on the host at `~/meridian/.env.bak-sagebot-*`. See
   FIRST — Sage self-edits it**; deploy steps in that plugin's README) + Sage's SOUL.md on
   the box. The per-request exit prompt Meridian sends is `EXIT_ADVISOR_PROMPT` in
   `src/app/management/cycle.ts`.
+- Change follow-the-wallet → `src/domain/rules/follow-diff.ts` (pure diff/sizing/range) +
+  `src/app/follow/cycle.ts` + `src/app/follow/learn.ts` +
+  `src/adapters/market/meteora-wallet-watcher.ts`.
 - Change the LLM contract → `src/app/agent/loop.ts` + `domain/prompt/builder.ts`.
 - Change deploy/close on-chain behavior → `src/adapters/chain/meteora/write-paths.ts` +
   `client.ts` (post-tool side-effects are in `tools/post/*`).

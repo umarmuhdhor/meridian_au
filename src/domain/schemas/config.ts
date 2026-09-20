@@ -133,6 +133,32 @@ export const TokensConfigSchema = z.object({
 });
 export type TokensConfig = z.infer<typeof TokensConfigSchema>;
 
+/**
+ * Follow-the-wallet. Mirrors a chosen wallet's DLMM entries and exits verbatim,
+ * deliberately routing around screening, the TA gate, cooldowns and blacklists —
+ * the user's judgement about the wallet replaces the bot's judgement about the pool.
+ * Off by default; arming it is a two-step (global `enabled` + per-wallet `enabled`).
+ */
+export const FollowConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** Poll cadence. Copy-trading latency is the whole game, so this is seconds, not minutes. */
+  intervalSec: z.number().int().min(15).max(3600).default(45),
+  /** Fraction of post-gas-reserve free SOL committed per mirrored entry. */
+  positionSizePct: z.number().positive().max(1).default(0.35),
+  minDeploySol: z.number().positive().default(0.05),
+  maxDeploySol: z.number().positive().default(1),
+  /** Bounds the copied bin width is clamped into. minBinsBelow may go under
+   *  MIN_SAFE_BINS_BELOW — that floor is the screener's, and follow waives it. */
+  minBinsBelow: z.number().int().min(1).default(20),
+  maxBinsBelow: z.number().int().min(1).max(400).default(120),
+  /** Used when datapi does not expose their lower bin. */
+  fallbackBinsBelow: z.number().int().min(1).max(400).default(55),
+  strategy: z.enum(["spot", "curve", "bid_ask"]).default("spot"),
+  /** Run the entry/exit retrospective and write a lesson after each mirrored close. */
+  learnEnabled: z.boolean().default(true),
+});
+export type FollowConfig = z.infer<typeof FollowConfigSchema>;
+
 export const AppConfigSchema = z.object({
   risk: RiskConfigSchema,
   management: ManagementConfigSchema,
@@ -144,6 +170,7 @@ export const AppConfigSchema = z.object({
   api: ApiConfigSchema,
   jupiter: JupiterConfigSchema,
   tokens: TokensConfigSchema,
+  follow: FollowConfigSchema,
 });
 export type AppConfig = z.infer<typeof AppConfigSchema>;
 

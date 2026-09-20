@@ -31,6 +31,18 @@ const cfg = {
   strategy: { strategy: "bid_ask", binsBelow: 69 },
   schedule: { managementIntervalMin: 10, screeningIntervalMin: 30, healthCheckIntervalMin: 60 },
   screening,
+  follow: {
+    enabled: false,
+    intervalSec: 45,
+    positionSizePct: 0.35,
+    minDeploySol: 0.05,
+    maxDeploySol: 1,
+    minBinsBelow: 20,
+    maxBinsBelow: 120,
+    fallbackBinsBelow: 55,
+    strategy: "spot",
+    learnEnabled: true,
+  },
 } as unknown as AppConfig;
 
 /** In-memory PoolMemoryRepo — no filesystem. */
@@ -208,6 +220,78 @@ export function memDevBlocklistRepo(): import("../../src/ports/dev-blocklist-rep
   };
 }
 
+export function memFollowRepo(
+  seed: Partial<import("../../src/domain/schemas/follow-wallet.js").FollowStateFile> = {},
+): import("../../src/ports/follow-repo.js").FollowRepo {
+  type FW = import("../../src/domain/schemas/follow-wallet.js").FollowedWallet;
+  type MP = import("../../src/domain/schemas/follow-wallet.js").MirroredPosition;
+  const wallets: FW[] = [...(seed.wallets ?? [])];
+  const seen: Record<string, string[]> = { ...(seed.seen ?? {}) };
+  const seeded: string[] = [...(seed.seeded ?? [])];
+  const mirrored: MP[] = [...(seed.mirrored ?? [])];
+  return {
+    async load() {
+      return { ok: true, value: { wallets, seen, seeded, mirrored } };
+    },
+    async listWallets() {
+      return wallets;
+    },
+    async addWallet(w) {
+      const i = wallets.findIndex((x) => x.address === w.address);
+      if (i === -1) wallets.push(w);
+      else wallets[i] = { ...wallets[i], ...w } as FW;
+    },
+    async removeWallet(addr) {
+      const before = wallets.length;
+      const kept = wallets.filter((w) => w.address !== addr);
+      wallets.length = 0;
+      wallets.push(...kept);
+      if (kept.length === before) return false;
+      delete seen[addr];
+      const s2 = seeded.filter((a) => a !== addr);
+      seeded.length = 0;
+      seeded.push(...s2);
+      return true;
+    },
+    async setWalletEnabled(addr, enabled) {
+      const w = wallets.find((x) => x.address === addr);
+      if (!w) return false;
+      w.enabled = enabled;
+      if (enabled) {
+        delete seen[addr];
+        const s2 = seeded.filter((a) => a !== addr);
+        seeded.length = 0;
+        seeded.push(...s2);
+      }
+      return true;
+    },
+    async getSeen(addr) {
+      return seeded.includes(addr) ? seen[addr] ?? [] : null;
+    },
+    async setSeen(addr, pools) {
+      seen[addr] = pools;
+      if (!seeded.includes(addr)) seeded.push(addr);
+    },
+    async listMirrored() {
+      return mirrored;
+    },
+    async listOpenMirrored() {
+      return mirrored.filter((m) => m.closed_at == null);
+    },
+    async addMirrored(rec) {
+      const i = mirrored.findIndex((m) => m.position === rec.position);
+      if (i === -1) mirrored.push(rec);
+      else mirrored[i] = { ...mirrored[i], ...rec } as MP;
+    },
+    async updateMirrored(position, patch) {
+      const i = mirrored.findIndex((m) => m.position === position);
+      if (i === -1) return false;
+      mirrored[i] = { ...mirrored[i], ...patch } as MP;
+      return true;
+    },
+  };
+}
+
 export function memTokenBlacklistRepo(): TokenBlacklistRepo {
   const bl: Record<string, import("../../src/domain/schemas/blacklist.js").BlacklistEntry> = {};
   return {
@@ -274,6 +358,7 @@ export function makeCtx(over: CtxOverrides = {}): AppContext {
     smartWallets: over.repos?.smartWallets ?? memSmartWalletRepo(),
     tokenBlacklist: over.repos?.tokenBlacklist ?? memTokenBlacklistRepo(),
     devBlocklist: over.repos?.devBlocklist ?? memDevBlocklistRepo(),
+    follow: over.repos?.follow ?? memFollowRepo(),
   };
   const market: AppContext["market"] = {
     pools: over.market?.pools ?? createFakePoolDiscovery({ seed: [] }),

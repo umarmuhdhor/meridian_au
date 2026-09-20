@@ -3,7 +3,7 @@ import { z } from "zod";
 export const DecisionTypeSchema = z.enum(["deploy", "close", "skip", "no_deploy", "note"]);
 export type DecisionType = z.infer<typeof DecisionTypeSchema>;
 
-export const DecisionActorSchema = z.enum(["SCREENER", "MANAGER", "GENERAL", "SAGE"]);
+export const DecisionActorSchema = z.enum(["SCREENER", "MANAGER", "GENERAL", "SAGE", "FOLLOW"]);
 export type DecisionActor = z.infer<typeof DecisionActorSchema>;
 
 export const DecisionEntrySchema = z.object({

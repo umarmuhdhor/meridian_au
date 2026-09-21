@@ -86,10 +86,14 @@ ulangi script. Rotasi token + secret sekalian: `--rotate`.
 ## 3. Jalankan dengan pm2
 
 ```powershell
-pm2 start ecosystem.config.cjs
+pm2 start deploy/homeserver/ecosystem.homeserver.config.cjs
 pm2 save
 pm2 status
 ```
+
+> Bukan `ecosystem.config.cjs` di root — itu punya image Docker (vivobook),
+> Next-nya listen di semua interface. Yang benar untuk homeserver ini adalah
+> `ecosystem.homeserver.config.cjs`, yang mengikat Next ke `127.0.0.1` saja.
 
 Verifikasi lokal sebelum menyentuh Cloudflare:
 

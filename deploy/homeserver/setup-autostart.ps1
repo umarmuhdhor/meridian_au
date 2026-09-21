@@ -38,9 +38,23 @@ if (-not (Test-Path $pm2)) { throw "pm2 tidak ditemukan di $pm2 . Jalankan: npm 
 $action = New-ScheduledTaskAction -Execute $node -Argument "`"$pm2`" resurrect" -WorkingDirectory $repoRoot
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
+
+# LogonType HARUS S4U, bukan Interactive (itu default kalau pakai -User).
+# Task Interactive butuh sesi user yang sudah login; saat trigger AtStartup
+# belum ada sesi sama sekali, jadi Windows melewatinya diam-diam - task
+# terbaca "Ready" selamanya tapi LastRunTime tetap kosong dan pm2 tidak pernah
+# bangkit setelah reboot. S4U jalan sebagai user tsb tanpa perlu login, jadi
+# PM2_HOME tetap di profil user itu dan `pm2 resurrect` baca dump yang benar.
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
+  -LogonType S4U -RunLevel Highest
 Register-ScheduledTask -TaskName "meridian-pm2-resurrect" -Action $action -Trigger $trigger `
-  -Settings $settings -RunLevel Highest -User $env:USERNAME -Force | Out-Null
-Write-Host "[1/3] Task 'meridian-pm2-resurrect' terdaftar." -ForegroundColor Green
+  -Settings $settings -Principal $principal -Force | Out-Null
+
+$registered = Get-ScheduledTask -TaskName "meridian-pm2-resurrect"
+if ($registered.Principal.LogonType -ne "S4U") {
+  throw "Task terdaftar sebagai $($registered.Principal.LogonType), bukan S4U - tidak akan jalan saat boot."
+}
+Write-Host "[1/3] Task 'meridian-pm2-resurrect' terdaftar (S4U, AtStartup)." -ForegroundColor Green
 
 # --- 2. Jangan tidur saat tercolok listrik -----------------------------------
 powercfg /change standby-timeout-ac 0
@@ -62,5 +76,6 @@ Write-Host "=== VERIFIKASI ===" -ForegroundColor Cyan
 Get-ScheduledTask -TaskName "meridian-pm2-resurrect" | Select-Object TaskName, State | Format-Table -AutoSize
 Get-Service cloudflared | Select-Object Name, Status, StartType | Format-Table -AutoSize
 & "${env:ProgramFiles(x86)}\cloudflared\cloudflared.exe" --version
-Write-Host "Harus terbaca: State=Ready, Status=Running, StartType=Automatic." -ForegroundColor Yellow
+(Get-ScheduledTask -TaskName "meridian-pm2-resurrect").Principal | Select-Object UserId, LogonType, RunLevel | Format-Table -AutoSize
+Write-Host "Harus terbaca: State=Ready, LogonType=S4U, Status=Running, StartType=Automatic." -ForegroundColor Yellow
 Write-Host "Ingat: jalankan 'pm2 save' di terminal biasa tiap kali daftar proses berubah."

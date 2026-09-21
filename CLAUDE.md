@@ -17,14 +17,19 @@ Autonomous DLMM liquidity provider agent for Meteora pools on Solana.
    JS was retired (`legacy-js` git tag). Architecture is **hexagonal**:
    `domain` (pure) → `ports` (interfaces) → `adapters` (implementations) →
    `app` (use-cases) → `entrypoints` (DI wiring).
-2. **Meridian is deployed and trading live.** 2 Docker containers (`meridian` +
-   `meridian-web`) on the **vivobook home server**, co-located with Sage
-   (Hermes agent) for intra-host screening delegation. Auto-deployed from
-   `dashboard` via GitHub Actions → GHCR → CF-Access-tunneled SSH to vivobook.
-   PIN-gated dashboard at `calisto.nafidinara.com` behind Cloudflare Access.
-   **All deploy/ops details live in [`deploy/OPERATIONS.md`](deploy/OPERATIONS.md)**
-   — this file is code internals only. Migration history + runbook:
-   [`deploy/MIGRATION-vivobook-runbook.md`](deploy/MIGRATION-vivobook-runbook.md).
+2. **Meridian is deployed and trading live.** Two **pm2** processes (`meridian`
+   daemon + `meridian-web` Next.js) on a **Windows homeserver** — native Node, no
+   Docker, no Caddy. Exposed through an outbound-only Cloudflare Tunnel
+   (`cloudflared` Windows service) at **`au.alieffauzan.com`**, gated by a 6-digit
+   PIN (and optionally Cloudflare Access at the edge). Deploys are manual
+   (`git pull` + build + `pm2 restart`) — there is no CI deploy pipeline.
+   **All deploy/ops details live in
+   [`deploy/homeserver/README.md`](deploy/homeserver/README.md)** — this file is
+   code internals only.
+   > **Historical:** the earlier vivobook / Docker / `calisto.nafidinara.com` setup
+   > is described in [`deploy/OPERATIONS.md`](deploy/OPERATIONS.md) and
+   > [`deploy/MIGRATION-vivobook-runbook.md`](deploy/MIGRATION-vivobook-runbook.md).
+   > Those are **superseded** — read them for history, not for how the box runs today.
 
 ---
 
@@ -438,11 +443,12 @@ becomes the *attention* threshold (not a hard close) in smart mode.
 | `user-config.json` | config-repo | the live config (loaded → nested `AppConfig`) |
 
 All writes are temp-file + fsync + atomic rename **except `user-config.json`**, which is
-written with `writeJsonAtomic(..., {inPlace:true})` — it is a single-file Docker bind
-mount and rename detaches its inode (see § Known issues). Config redaction
-(`*key/token/secret*`) happens when a file is served over the bridge. In production the
-state files live on the `/opt/data` volume (`MERIDIAN_STATE_DIR=/opt/data`); the config is
-a separate host bind mount at `/app/user-config.json` — see `deploy/OPERATIONS.md`.
+written with `writeJsonAtomic(..., {inPlace:true})` — under Docker it was a single-file
+bind mount whose rename detaches the inode (see § Known issues); the in-place write is
+kept because it is strictly safer. Config redaction (`*key/token/secret*`) happens when a
+file is served over the bridge. On the current homeserver both the state files and
+`user-config.json` are plain files on the repo root — see
+`deploy/homeserver/README.md`.
 
 ---
 
@@ -488,7 +494,7 @@ a separate host bind mount at `/app/user-config.json` — see `deploy/OPERATIONS
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` / `TELEGRAM_ALLOWED_USER_IDS` | ops surface + auth. In production (since 2026-08-02) `TELEGRAM_BOT_TOKEN` is Sage's bot token — Meridian and Hermes share the same bot identity (@SageHermesAnd_bot); Meridian only writes, Hermes handles inbound. |
 | `MERIDIAN_TELEGRAM_INBOUND` | **must be `false` in production** — two processes polling the shared token = `getUpdates` 409. Set as compose default. |
 | **`MERIDIAN_DECIDER`** | `sage` → screening delegates the deploy decision to Sage (Path 2); anything else / unset = local LLM loop. **Compose default is `sage` since 2026-08-02.** |
-| `SAGE_BASE_URL` / `SAGE_API_KEY` / `SAGE_SESSION_KEY` / `SAGE_TIMEOUT_MS` | Sage endpoint (Hermes api), memory-scope header, delegation timeout (default 90s). Only read when `MERIDIAN_DECIDER=sage`. On vivobook production the URL is intra-host: `http://host.docker.internal:8643` (see `docker-compose.yml` `extra_hosts`). |
+| `SAGE_BASE_URL` / `SAGE_API_KEY` / `SAGE_SESSION_KEY` / `SAGE_TIMEOUT_MS` | Sage endpoint (Hermes api), memory-scope header, delegation timeout (default 90s). Only read when `MERIDIAN_DECIDER=sage`. **Unset on the current homeserver → Sage is disabled and screening uses the local ReAct loop.** (Vivobook-era value was the intra-host `http://host.docker.internal:8643`.) |
 | `SAGE_EXIT_TIMEOUT_MS` | `SageExitAdvisor` request timeout (default 30000). The exit advisor reuses `SAGE_BASE_URL`/`SAGE_API_KEY`/`SAGE_SESSION_KEY`; the advisor is created whenever those are set, but only consulted when `sageExitEnabled=true`. |
 | `SAGE_CF_ACCESS_CLIENT_ID` / `SAGE_CF_ACCESS_CLIENT_SECRET` | **Historical** — CF Access service-token headers used when Sage was fronted by Cloudflare Access (pre-2026-08-01 Tencent era). Intra-host path drops them; the code still reads them if set. |
 | `SOL_PRICE_USD` | static-price fallback (default 150). |
@@ -523,7 +529,8 @@ A `node:http` server (zero external deps) bound to **`127.0.0.1` only** (never
 - **The Next.js web app** (`dashboard/web/`) is the only public surface. It talks to
   the bridge server-side only (token never reaches the browser) via same-origin
   `/api/*` proxies. PIN auth: `middleware.ts` (iron-session cookie) + `lib/auth-core.ts`
-  (scrypt + constant-time + rate-limit). Deployment/auth details → `deploy/OPERATIONS.md`.
+  (scrypt + constant-time + rate-limit). Deployment/auth details →
+  `deploy/homeserver/README.md`.
 
 ---
 
@@ -561,7 +568,8 @@ retired; env backups on the host at `~/meridian/.env.bak-sagebot-*`. See
 - **`FILE_WHITELIST` + redaction are duplicated** in the bridge (`allowlist.ts`/`redact.ts`)
   and the web fs path (`dashboard/web/lib/files.ts`) — keep them in sync.
 - **`patch-anchor.js` (postinstall) is mandatory on Node 22** or `@meteora-ag/dlmm`
-  fails to load (anchor ESM directory-import + `BN` export). See `deploy/OPERATIONS.md`.
+  fails to load (anchor ESM directory-import + `BN` export). See
+  `deploy/homeserver/README.md`.
 - **Jupiter Price v6 is sunset** — code uses `lite-api.jup.ag/price/v3`; swap uses v6.
 - **Deploys are single-side SOL only** (`planDeploy` throws otherwise); wide-range (>69
   bins) is multi-tx with different slippage units per path.
@@ -631,7 +639,8 @@ retired; env backups on the host at `~/meridian/.env.bak-sagebot-*`. See
   `getPollerFastCut`) + `src/app/management/cycle.ts` (`resolveEscalation`) + `pnl-poller.ts`;
   design in [`deploy/SPEC-2026-08-29-smart-exit-regime-engine.md`](deploy/SPEC-2026-08-29-smart-exit-regime-engine.md).
 - Change what Sage knows (screening OR exit-advisor prompts/behavior) →
-  `deploy/hermes-meridian-plugin/skill/SKILL.md` (**pull the live copy from vivobook
+  `deploy/hermes-meridian-plugin/skill/SKILL.md` — **only relevant when Sage is wired
+  up; it is disabled on the current homeserver** (**pull the live copy from vivobook
   FIRST — Sage self-edits it**; deploy steps in that plugin's README) + Sage's SOUL.md on
   the box. The per-request exit prompt Meridian sends is `EXIT_ADVISOR_PROMPT` in
   `src/app/management/cycle.ts`.
@@ -640,4 +649,6 @@ retired; env backups on the host at `~/meridian/.env.bak-sagebot-*`. See
   `client.ts` (post-tool side-effects are in `tools/post/*`).
 - Config schema → `src/domain/schemas/config*.ts` + `config-load.ts`.
 - Dashboard/bridge → `src/adapters/dashboard/` + `dashboard/web/`.
-- **Deployment / ops / secrets / troubleshooting → [`deploy/OPERATIONS.md`](deploy/OPERATIONS.md).**
+- **Deployment / ops / secrets / troubleshooting →
+  [`deploy/homeserver/README.md`](deploy/homeserver/README.md)** (the vivobook-era
+  `deploy/OPERATIONS.md` is historical).

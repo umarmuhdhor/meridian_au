@@ -1,5 +1,13 @@
 # Sage ⇄ Meridian (Path 2) — live architecture & operations
 
+> ⚠️ **HISTORICAL — superseded by [`deploy/homeserver/README.md`](homeserver/README.md).**
+> This document describes the retired vivobook / Docker / Cloudflare-Access setup
+> (`calisto.nafidinara.com`, GitHub Actions auto-deploy, Sage delegation over
+> `sage-api.nafidinara.com`). Meridian now runs on a Windows homeserver as pm2
+> processes behind a Cloudflare Tunnel at `au.alieffauzan.com`, with **no CI deploy
+> pipeline** and **Sage disabled** (no `SAGE_*` env → local ReAct loop decider).
+> Kept for history only. Do not follow these steps against the current box.
+
 **⚠️ SUPERSEDED (2026-08-01).** This doc describes the Tencent-era Path 2 architecture
 where Meridian (on Tencent HK VPS) reached Sage on vivobook over a Cloudflare Tunnel
 (`sage-api.nafidinara.com` + `mrd-bridge.nafidinara.com`) with CF Access service tokens.

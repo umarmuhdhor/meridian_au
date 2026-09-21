@@ -202,18 +202,24 @@ See `dashboard/PRD.md`, `dashboard/Design.md`, and `dashboard/plan/` for the ful
 
 ## Production deployment
 
-Meridian is deployed live on the **vivobook home server** as Docker containers,
-**co-located with the Sage (Hermes) agent** for intra-host screening delegation.
-Auto-deployed from the `dashboard` branch via GitHub Actions → GHCR, reaching
-the box through Cloudflare Access SSH (zero open inbound ports). Public
-PIN-gated dashboard at `https://calisto.nafidinara.com` behind Cloudflare
-Access. Push to `dashboard` and the server updates itself: tests gate the
-release, an unhealthy deploy auto-rolls-back, and dashboard-only changes
-hot-swap without restarting the trading daemon.
+Meridian runs live on a **Windows homeserver** as two **pm2** processes — the
+`meridian` trading daemon and the `meridian-web` Next.js dashboard. Native Node:
+no Docker, no Caddy. The dashboard reaches the internet through an outbound-only
+**Cloudflare Tunnel** (`cloudflared` as a Windows service) at
+`https://au.alieffauzan.com` — **no router port is opened**. Two auth doors sit in
+front of it: optional Cloudflare Access at the edge, plus the app's own 6-digit
+PIN. The bridge on `8787` only ever listens on `127.0.0.1` and is never exposed.
+Deploys are manual: `git pull`, build, `pm2 restart`.
 
-**Full operations manual: [`deploy/OPERATIONS.md`](deploy/OPERATIONS.md)** — the
-A-Z on hosts, the deploy pipeline, secrets, config, dashboard auth, the runbook,
-troubleshooting, and rollback. Start there for anything deploy-related.
+**Full operations manual:
+[`deploy/homeserver/README.md`](deploy/homeserver/README.md)** — tunnel setup,
+pm2 autostart, secrets, PIN auth, and troubleshooting. Start there for anything
+deploy-related.
+
+> **Historical.** Meridian previously ran as Docker containers on the vivobook
+> box at `calisto.nafidinara.com`, auto-deployed from the `dashboard` branch via
+> GitHub Actions. That setup is **retired**; `deploy/OPERATIONS.md` and
+> `deploy/MIGRATION-vivobook-runbook.md` are kept for history only.
 
 ---
 

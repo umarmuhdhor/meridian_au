@@ -1,8 +1,16 @@
 # Meridian — Operations Manual (A-Z)
 
-> **Canonical source of truth for how Meridian is deployed and operated in
-> production.** If anything here disagrees with an older doc (`PRD-deployment.md`,
-> `PLAN-deployment.md`), this file wins. Last major update: 2026-08-01
+> ⚠️ **HISTORICAL — superseded by [`deploy/homeserver/README.md`](homeserver/README.md).**
+> This document describes the retired vivobook / Docker / Cloudflare-Access setup
+> (`calisto.nafidinara.com`, GitHub Actions auto-deploy, Sage delegation over
+> `sage-api.nafidinara.com`). Meridian now runs on a Windows homeserver as pm2
+> processes behind a Cloudflare Tunnel at `au.alieffauzan.com`, with **no CI deploy
+> pipeline** and **Sage disabled** (no `SAGE_*` env → local ReAct loop decider).
+> Kept for history only. Do not follow these steps against the current box.
+
+> **Was the canonical source of truth for the vivobook era.** If anything here
+> disagrees with an older doc (`PRD-deployment.md`, `PLAN-deployment.md`), this
+> file wins — but all three are superseded by `deploy/homeserver/README.md`. Last major update: 2026-08-01
 > (Tencent HK → vivobook migration; co-located with Sage).
 
 ---

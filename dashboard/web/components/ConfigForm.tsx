@@ -90,7 +90,7 @@ export function ConfigForm() {
   // Per-group dirty count for tab badges.
   const dirtyPerGroup = useMemo(() => {
     const out: Record<ConfigGroup, number> = {
-      screening: 0, deploy: 0, exit: 0, rebalance: 0, automation: 0, integrations: 0,
+      screening: 0, deploy: 0, exit: 0, rebalance: 0, automation: 0, follow: 0, integrations: 0,
     };
     for (const key of dirtyKeys) {
       const field = CONFIG_FIELDS.find((f) => f.key === key);

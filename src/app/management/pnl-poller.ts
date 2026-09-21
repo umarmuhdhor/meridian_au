@@ -5,9 +5,12 @@ import type { SwapClient } from "../../ports/swap-client.js";
 import type { Notifier } from "../../ports/notifier.js";
 import type { Scheduler } from "../../ports/scheduler.js";
 import type { PositionRepo } from "../../ports/position-repo.js";
+import type { FollowRepo } from "../../ports/follow-repo.js";
+import type { FollowConfig } from "../../domain/schemas/config.js";
 import type { ManagementConfig } from "../../domain/schemas/config.js";
 import type { OnChainPosition, PositionsSnapshot } from "../../domain/schemas/chain.js";
 import { assessPnl } from "../../domain/rules/pnl.js";
+import { partitionMirrorOwnership } from "../../domain/rules/follow-diff.js";
 import { getPollerFastCut } from "../../domain/rules/close-rules.js";
 import { consolidateBaseToSol } from "./consolidate.js";
 import { enrichCloseResult } from "../../domain/format/enrich-close.js";
@@ -145,6 +148,17 @@ export interface PnlPollerDeps {
   scheduler: Scheduler;
   positionRepo: PositionRepo;
   config: ManagementConfig;
+  /**
+   * When both are present AND `followConfig.exclusiveExit` reads true at TICK time,
+   * positions held by an open follow mirror are removed from the tick entirely — no
+   * trailing-TP queue, no smart-exit fast-cut. The followed wallet owns the exit.
+   *
+   * `followConfig` must be the LIVE config section (update_config mutates it in place),
+   * not a copy: reading it per tick is what makes the flag hot-reloadable instead of
+   * pinned to whatever it was at boot. Either absent = poller behaves exactly as before.
+   */
+  followRepo?: FollowRepo;
+  followConfig?: FollowConfig;
   pollIntervalMs?: number;
   confirmDelayMs?: number;
   confirmTolerancePct?: number;
@@ -182,11 +196,34 @@ export function createPnlPoller(deps: PnlPollerDeps): PnlPollerHandle {
     busy = true;
     try {
       const snap = await deps.chain.getMyPositions({ force: true });
+      // Drop follow-mirrored positions before any exit logic runs. Filtering here
+      // rather than inside `tickPnlPoller` keeps the pure function unaware of the
+      // feature, and covers BOTH paths it owns (trailing-TP and the fast-cut).
+      //
+      // Only mirrors still OWNED by a live, enabled, followed wallet are dropped. Once a
+      // mirror is orphaned — master switch off, wallet disabled, wallet removed — nobody
+      // is left to close it, so the fast-cut and trailing-TP take it back. The follow
+      // cycle closes orphans outright; this covers the gap until it does.
+      const followHeld =
+        deps.followRepo && deps.followConfig?.exclusiveExit
+          ? new Set(
+              partitionMirrorOwnership({
+                followEnabled: deps.followConfig.enabled,
+                wallets: await deps.followRepo.listWallets(),
+                openMirrors: await deps.followRepo.listOpenMirrored(),
+              }).owned.map((m) => m.position),
+            )
+          : new Set<string>();
+      const eligible =
+        followHeld.size > 0
+          ? snap.positions.filter((p) => !followHeld.has(p.position))
+          : snap.positions;
       // Merge peak_pnl_pct from the persisted state into the live snapshot in-place.
       const withPeak: PositionsSnapshot = {
         ...snap,
+        total_positions: eligible.length,
         positions: await Promise.all(
-          snap.positions.map(async (p) => {
+          eligible.map(async (p) => {
             const tracked = await deps.positionRepo.get(p.position);
             return {
               ...p,

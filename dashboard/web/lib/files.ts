@@ -16,6 +16,7 @@ export const FILE_WHITELIST: Record<string, string> = {
   "token-blacklist": "token-blacklist.json",
   "dev-blocklist": "dev-blocklist.json",
   "state": "state.json",
+  "follow-state": "follow-state.json",
   "user-config": "user-config.json",
 };
 

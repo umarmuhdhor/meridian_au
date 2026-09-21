@@ -30,6 +30,7 @@ export const CONFIG_GROUPS = [
   "exit",
   "rebalance",
   "automation",
+  "follow",
   "integrations",
 ] as const;
 export type ConfigGroup = (typeof CONFIG_GROUPS)[number];
@@ -40,6 +41,7 @@ export const GROUP_LABELS: Record<ConfigGroup, string> = {
   exit: "Exit rules",
   rebalance: "Rebalance & Sweep",
   automation: "Automation",
+  follow: "Follow wallet",
   integrations: "Integrations",
 };
 
@@ -49,6 +51,7 @@ export const GROUP_HELP: Record<ConfigGroup, string> = {
   exit: "When positions close automatically. Deterministic — Sage does not race these.",
   rebalance: "Fee claiming, dust sweeping, and low-yield closes.",
   automation: "Cron cadence and LLM model choices.",
+  follow: "Copy-trade a chosen wallet. Bypasses screening, the TA gate, cooldowns and blacklists by design — add wallets on the Follow page.",
   integrations: "External endpoints and API keys.",
 };
 
@@ -132,6 +135,23 @@ export const CONFIG_FIELDS: ConfigField[] = [
   f("managementModel", "string", "automation", { unit: "model slug", help: "OpenRouter model for the manager, e.g. minimax/minimax-m2.7. Must be an exact slug." }),
   f("screeningModel", "string", "automation", { unit: "model slug", help: "OpenRouter model for the screener. Must be an exact slug." }),
   f("generalModel", "string", "automation", { unit: "model slug", help: "OpenRouter model for chat / Telegram. Must be an exact slug." }),
+
+  // ── follow the wallet ──
+  f("followEnabled", "boolean", "follow", { help: "MASTER SWITCH for copy-trading. When on, every ENABLED followed wallet is polled and its DLMM entries/exits are mirrored. Screening, the TA gate, pool/token cooldowns and both blacklists are bypassed on this path — wallet balance and maxPositions still apply. WARNING: turning this OFF closes every open mirrored position on the next follow tick. A mirror has no local exit rules while it is mirrored, so it is unwound rather than left with nothing to close it — this switch executes trades, it is not a safe pause button." }),
+  f("followIntervalSec", "number", "follow", { unit: "seconds", help: "How often each followed wallet is polled. Lower = faster mirroring, more datapi requests. 45 = every 45s." }),
+  f("followPositionSizePct", "number", "follow", { unit: "fraction", help: "Fraction of FREE SOL (balance minus gasReserve) committed per mirrored entry. 0.35 = 35%. Their size is irrelevant — yours scales with your own balance." }),
+  f("followMinDeploySol", "number", "follow", { unit: "SOL", help: "Skip the mirror when the sized amount lands below this. Prevents dust positions when the wallet is nearly empty." }),
+  f("followMaxDeploySol", "number", "follow", { unit: "SOL", help: "Hard cap per mirrored entry, whatever the percentage works out to." }),
+  f("followMinBinsBelow", "number", "follow", { unit: "bins", help: "Floor on the copied range width. May go BELOW the 35-bin screener safety floor — follow copies their range, and many LPs run narrow. 20 = at least 20 bins below the active bin." }),
+  f("followMaxBinsBelow", "number", "follow", { unit: "bins", help: "Ceiling on the copied range width. Above 69 bins the deploy uses the multi-tx wide-range path." }),
+  f("followFallbackBinsBelow", "number", "follow", { unit: "bins", help: "Width used when datapi does not expose their lower bin. 55 = same default the screener uses." }),
+  f("followStrategy", "string", "follow", { options: ["spot", "curve", "bid_ask"], help: "Liquidity shape for mirrored entries. Their shape is not reported by datapi, so this is yours to pick." }),
+  f("followExclusiveExit", "boolean", "follow", { help: "THE FOLLOWED WALLET OWNS THE EXIT. true = mirrored positions are exempt from every local close rule (stop-loss, take-profit, trailing-TP, out-of-range, low-yield, smart-exit) and close ONLY when the source wallet leaves the pool. Fee claims still run. WARNING: with this on a mirrored position has no local downside protection — if the source wallet goes quiet or datapi stays unreachable, nothing will close it. false = the normal exit rules apply and may close a mirror while the source wallet is still holding." }),
+  f("followStaleTicksBeforeAlert", "number", "follow", { unit: "ticks", help: "Consecutive failed polls of one wallet before a Telegram alert. Matters most with followExclusiveExit on: while polling is degraded, exits are not mirrored and those positions have no local stop. 5 ticks at 45s ≈ 4 minutes." }),
+  f("followMaxMirrored", "number", "follow", { unit: "positions", help: "Cap on how many mirrors may be open at once, separate from maxPositions. Mirrors do not close on local exit rules when followExclusiveExit is on, so without this they can hold every slot indefinitely and starve screening. Keep it BELOW maxPositions to reserve room. 2 with maxPositions 3 = screening always keeps one slot." }),
+  f("followMirrorRecenter", "boolean", "follow", { help: "Close and re-mirror when the followed wallet re-centers inside a pool it stays in. A pool-membership diff cannot see that on its own, and followExclusiveExit has switched off the out-of-range rule that used to clean up the stranded range. Costs one extra datapi call per open mirror per tick, plus a close+reopen in fees when it fires." }),
+  f("followRecenterBinThreshold", "number", "follow", { unit: "bins", help: "Bin drift below which a range change counts as noise rather than a re-center. Only consulted when their position address is unknown — a disappeared position address is treated as a re-center outright." }),
+  f("followLearnEnabled", "boolean", "follow", { help: "After each mirrored close, ask the LLM to infer why the wallet entered and exited, and save it as a tagged lesson. Entry/exit technicals are recorded either way." }),
 
   // ── integrations ──
   f("hiveMindUrl", "string", "integrations", { unit: "url", help: "Agent Meridian HiveMind base URL. Empty breaks hivemind-sync." }),

@@ -63,6 +63,11 @@ export const DeployArgsSchema = z.object({
   holders: z.number().int().nonnegative().optional(),
   /** Smart-wallet flag at deploy time. */
   smart_wallets_present: z.boolean().optional(),
+  /**
+   * Waives the 35-bin safety floor in planDeploy. Set only by follow_deploy_position,
+   * which copies a followed wallet's range verbatim.
+   */
+  allow_tiny_range: z.boolean().optional(),
 });
 export type DeployArgs = z.infer<typeof DeployArgsSchema>;
 

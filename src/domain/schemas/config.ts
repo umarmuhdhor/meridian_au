@@ -133,6 +133,61 @@ export const TokensConfigSchema = z.object({
 });
 export type TokensConfig = z.infer<typeof TokensConfigSchema>;
 
+/**
+ * Follow-the-wallet. Mirrors a chosen wallet's DLMM entries and exits verbatim,
+ * deliberately routing around screening, the TA gate, cooldowns and blacklists —
+ * the user's judgement about the wallet replaces the bot's judgement about the pool.
+ * Off by default; arming it is a two-step (global `enabled` + per-wallet `enabled`).
+ */
+export const FollowConfigSchema = z.object({
+  /**
+   * Master switch. Turning it OFF is not a pause: every open mirror is closed on the
+   * next follow tick, because `exclusiveExit` has already handed those positions' exits
+   * to wallets that are no longer being polled. See `partitionMirrorOwnership`.
+   */
+  enabled: z.boolean().default(false),
+  /** Poll cadence. Copy-trading latency is the whole game, so this is seconds, not minutes. */
+  intervalSec: z.number().int().min(15).max(3600).default(45),
+  /** Fraction of post-gas-reserve free SOL committed per mirrored entry. */
+  positionSizePct: z.number().positive().max(1).default(0.35),
+  minDeploySol: z.number().positive().default(0.05),
+  maxDeploySol: z.number().positive().default(1),
+  /** Bounds the copied bin width is clamped into. minBinsBelow may go under
+   *  MIN_SAFE_BINS_BELOW — that floor is the screener's, and follow waives it. */
+  minBinsBelow: z.number().int().min(1).default(20),
+  maxBinsBelow: z.number().int().min(1).max(400).default(120),
+  /** Used when datapi does not expose their lower bin. */
+  fallbackBinsBelow: z.number().int().min(1).max(400).default(55),
+  strategy: z.enum(["spot", "curve", "bid_ask"]).default("spot"),
+  /**
+   * The followed wallet owns the exit. When true, mirrored positions are exempt from
+   * EVERY local close rule — stop-loss, take-profit, trailing-TP, OOR, low-yield and
+   * the smart-exit engine — so only the source wallet's exit closes them. Fee CLAIMS
+   * still run. Turning this off hands mirrored positions back to the normal exit rules,
+   * which will close them independently of the wallet being followed.
+   */
+  exclusiveExit: z.boolean().default(true),
+  /** Consecutive degraded snapshots for one wallet before an alert is raised. */
+  staleTicksBeforeAlert: z.number().int().min(1).default(5),
+  /**
+   * Cap on concurrent mirrors, independent of risk.maxPositions. Mirrors have no local
+   * exit under `exclusiveExit`, so without their own cap they can hold every portfolio
+   * slot indefinitely and starve screening. Keep it below maxPositions to reserve room.
+   */
+  maxMirrored: z.number().int().min(1).default(2),
+  /**
+   * Close and re-mirror when the followed wallet re-centers inside a pool it stays in.
+   * A pool-membership diff cannot see that on its own, and `exclusiveExit` has disabled
+   * the out-of-range rule that used to clean up the stranded range.
+   */
+  mirrorRecenter: z.boolean().default(true),
+  /** Bin drift below which a range change is treated as noise, not a re-center. */
+  recenterBinThreshold: z.number().int().min(1).default(10),
+  /** Run the entry/exit retrospective and write a lesson after each mirrored close. */
+  learnEnabled: z.boolean().default(true),
+});
+export type FollowConfig = z.infer<typeof FollowConfigSchema>;
+
 export const AppConfigSchema = z.object({
   risk: RiskConfigSchema,
   management: ManagementConfigSchema,
@@ -144,6 +199,7 @@ export const AppConfigSchema = z.object({
   api: ApiConfigSchema,
   jupiter: JupiterConfigSchema,
   tokens: TokensConfigSchema,
+  follow: FollowConfigSchema,
 });
 export type AppConfig = z.infer<typeof AppConfigSchema>;
 

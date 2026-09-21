@@ -16,6 +16,12 @@ export interface DeployPlanInput {
   amountY: number;
   amountX?: number;
   minBinsBelow?: number;
+  /**
+   * Waives the MIN_SAFE_BINS_BELOW floor. Set ONLY by the follow-the-wallet path,
+   * where the range is copied from a wallet the user chose to trust rather than
+   * chosen by the screener. Every other caller leaves this unset and keeps the floor.
+   */
+  allowTinyRange?: boolean;
 }
 
 export interface DeployPlan {
@@ -64,7 +70,9 @@ export function planDeploy(input: DeployPlanInput): DeployPlan {
   } = input;
   let binsBelow = input.binsBelow;
   let binsAbove = input.binsAbove;
-  const minBinsBelow = Math.max(MIN_SAFE_BINS_BELOW, input.minBinsBelow ?? MIN_SAFE_BINS_BELOW);
+  const minBinsBelow = input.allowTinyRange
+    ? Math.max(1, input.minBinsBelow ?? 1)
+    : Math.max(MIN_SAFE_BINS_BELOW, input.minBinsBelow ?? MIN_SAFE_BINS_BELOW);
 
   if (!Number.isFinite(amountY) || !Number.isFinite(amountX) || amountY < 0 || amountX < 0) {
     throw new Error("planDeploy: amountY and amountX must be finite non-negative numbers");

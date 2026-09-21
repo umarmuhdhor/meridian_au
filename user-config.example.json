@@ -1,14 +1,12 @@
 {
-  "// risk / position sizing": "One knob (deployAmountSol) — no separate risk cap.",
+  "// risk / position sizing": "One knob (deployAmountSol) \u2014 no separate risk cap.",
   "maxPositions": 3,
   "deployAmountSol": 0.5,
   "gasReserve": 0.2,
   "positionSizePct": 0.35,
-
-  "// strategy": "Sage picks per candidate — this is the fallback / display default.",
+  "// strategy": "Sage picks per candidate \u2014 this is the fallback / display default.",
   "strategy": "spot",
   "binsBelow": 69,
-
   "// screening filters": "",
   "timeframe": "5m",
   "category": "trending",
@@ -30,7 +28,6 @@
   "blockedLaunchpads": [],
   "minTokenAgeHours": null,
   "maxTokenAgeHours": null,
-
   "// exit rules": "",
   "stopLossPct": -50,
   "stopLossGraceMinutes": 30,
@@ -43,7 +40,6 @@
   "trailingDropPct": 1.5,
   "pnlSanityMaxDiffPct": 5,
   "solMode": false,
-
   "// claim + consolidate + dust": "",
   "minClaimAmount": 5,
   "autoSwapSlippageBps": 300,
@@ -54,12 +50,10 @@
   "dustSweepIntervalMin": 5,
   "dustSweepMinUsd": 0.01,
   "dustSweepSlippageBps": 500,
-
   "// schedule": "",
   "managementIntervalMin": 10,
   "screeningIntervalMin": 30,
   "healthCheckIntervalMin": 60,
-
   "// llm": "",
   "temperature": 0.373,
   "maxTokens": 4096,
@@ -67,7 +61,6 @@
   "managementModel": "minimax/minimax-m2.7",
   "screeningModel": "minimax/minimax-m2.7",
   "generalModel": "minimax/minimax-m2.7",
-
   "// integrations": "",
   "agentId": "",
   "publicApiKey": "",
@@ -76,5 +69,20 @@
   "hiveMindApiKey": "",
   "hiveMindPullMode": "auto",
   "jupiterReferralAccount": "",
-  "jupiterReferralFeeBps": 50
+  "jupiterReferralFeeBps": 50,
+  "followEnabled": false,
+  "followIntervalSec": 45,
+  "followPositionSizePct": 0.35,
+  "followMinDeploySol": 0.05,
+  "followMaxDeploySol": 1,
+  "followMinBinsBelow": 20,
+  "followMaxBinsBelow": 120,
+  "followFallbackBinsBelow": 55,
+  "followStrategy": "spot",
+  "followLearnEnabled": true,
+  "followExclusiveExit": true,
+  "followStaleTicksBeforeAlert": 5,
+  "followMaxMirrored": 2,
+  "followMirrorRecenter": true,
+  "followRecenterBinThreshold": 10
 }

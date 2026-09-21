@@ -211,6 +211,7 @@ export function createMeteoraWriteHelpers(deps: WritePathsDeps): MeteoraWriteHel
       binsBelow: args.bins_below,
       binsAbove: args.bins_above,
       amountY: args.amount_sol,
+      ...(args.allow_tiny_range ? { allowTinyRange: true } : {}),
     });
 
     const buildPk = deps.pubkeyFromAddress ?? defaultPubkeyFromAddress;

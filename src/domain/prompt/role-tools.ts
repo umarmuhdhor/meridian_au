@@ -40,4 +40,10 @@ export const GENERAL_TOOLS: readonly string[] = [
   "get_active_strategy",
   "add_to_blacklist",
   "claim_fees",
+  // Follow-the-wallet management. The MIRROR itself (follow_deploy_position) is
+  // intentionally absent from every role list — only the follow cycle may call it.
+  "list_follow_wallets",
+  "add_follow_wallet",
+  "remove_follow_wallet",
+  "set_follow_wallet_enabled",
 ];

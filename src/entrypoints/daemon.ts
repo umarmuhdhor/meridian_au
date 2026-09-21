@@ -16,6 +16,14 @@ import { createJsonStrategyRepo } from "../adapters/persistence/json/strategy-re
 import { createJsonSmartWalletRepo } from "../adapters/persistence/json/smart-wallet-repo.js";
 import { createJsonTokenBlacklistRepo } from "../adapters/persistence/json/token-blacklist-repo.js";
 import { createJsonDevBlocklistRepo } from "../adapters/persistence/json/dev-blocklist-repo.js";
+import { createJsonFollowRepo } from "../adapters/persistence/json/follow-repo.js";
+import { followDeployPositionTool } from "../app/tools/impls/follow-deploy-position.js";
+import { addFollowWalletTool } from "../app/tools/impls/add-follow-wallet.js";
+import { removeFollowWalletTool } from "../app/tools/impls/remove-follow-wallet.js";
+import { listFollowWalletsTool } from "../app/tools/impls/list-follow-wallets.js";
+import { setFollowWalletEnabledTool } from "../app/tools/impls/set-follow-wallet-enabled.js";
+import { createMeteoraWalletWatcher } from "../adapters/market/meteora-wallet-watcher.js";
+import { createFollowWatcher, FOLLOW_BASE_TICK_MS } from "../app/follow/cycle.js";
 import { createDryRunChainClient } from "../adapters/chain/dry-run.js";
 import { createMeteoraChainClient } from "../adapters/chain/meteora/client.js";
 import { createSolanaConnection, loadWalletKeypair } from "../adapters/chain/meteora/connection.js";
@@ -118,6 +126,14 @@ const STATE_DIR = process.env.MERIDIAN_STATE_DIR
   : REPO_ROOT;
 
 const ALL_TOOLS = [
+  // follow-the-wallet. `followDeployPositionTool` is registered so the follow cycle can
+  // reach it through executeTool, but it is deliberately absent from every role list in
+  // domain/prompt/role-tools.ts — no LLM can call it.
+  followDeployPositionTool,
+  addFollowWalletTool,
+  removeFollowWalletTool,
+  listFollowWalletsTool,
+  setFollowWalletEnabledTool,
   getPoolMemoryTool,
   assertPoolDeployableTool,
   getWalletBalanceTool,
@@ -207,6 +223,7 @@ async function boot(): Promise<BootResult> {
   const smartWallets = createJsonSmartWalletRepo({ filePath: path.join(STATE_DIR, "smart-wallets.json"), logger });
   const tokenBlacklist = createJsonTokenBlacklistRepo({ filePath: path.join(STATE_DIR, "token-blacklist.json"), logger });
   const devBlocklist = createJsonDevBlocklistRepo({ filePath: path.join(STATE_DIR, "dev-blocklist.json"), logger });
+  const follow = createJsonFollowRepo({ filePath: path.join(STATE_DIR, "follow-state.json"), logger });
 
   const chainMode = (process.env.MERIDIAN_CHAIN ?? "dryrun").toLowerCase();
   const priceMode = (
@@ -397,7 +414,7 @@ async function boot(): Promise<BootResult> {
     swap,
     notifier,
     market,
-    repos: { positions, poolMemory, lessons, decisions, strategies, smartWallets, tokenBlacklist, devBlocklist },
+    repos: { positions, poolMemory, lessons, decisions, strategies, smartWallets, tokenBlacklist, devBlocklist, follow },
   };
 
   const apiKey = process.env.OPENROUTER_API_KEY ?? process.env.LLM_API_KEY;
@@ -579,6 +596,12 @@ async function main(): Promise<void> {
       scheduler,
       positionRepo: ctx.repos.positions,
       config: ctx.config.management,
+      // Follow mirrors are exempt from trailing-TP and the fast-cut — the followed
+      // wallet owns the exit. Both are passed unconditionally and the poller reads
+      // `exclusiveExit` off the live section each tick, so toggling it from the
+      // dashboard takes effect without a restart.
+      followRepo: ctx.repos.follow,
+      followConfig: ctx.config.follow,
     });
     console.log("  pnl-poller: 30s trailing-TP + 15s two-phase confirm");
 
@@ -601,6 +624,35 @@ async function main(): Promise<void> {
     } else {
       console.log("  dust-sweeper: disabled (management.dustSweepEnabled=false)");
     }
+
+    // ── Follow-the-wallet ───────────────────────────────────────────────────
+    // Mirrors a followed wallet's entries/exits, routing around screening and the
+    // TA gate by design. Two switches must both be on: follow.enabled, and `enabled`
+    // on the individual wallet.
+    //
+    // Constructed UNCONDITIONALLY. The watcher re-reads follow.enabled, intervalSec and
+    // learnEnabled on every tick, so all three can be toggled from the dashboard without
+    // a restart. Gating construction on the boot-time value would make the Config page
+    // silently lie: the save succeeds, the daemon keeps the old behaviour.
+    const followWatcher = createFollowWatcher({
+      ctx,
+      registry,
+      repo: ctx.repos.follow,
+      watcher: createMeteoraWalletWatcher({ logger: ctx.logger }),
+      scheduler,
+      // Passed unconditionally too — the retrospective checks follow.learnEnabled at
+      // call time, so withholding the client here would make turning it on a no-op.
+      llm,
+      model: modelFor("management"),
+    });
+    const followed = await ctx.repos.follow.listWallets();
+    console.log(
+      ctx.config.follow.enabled
+        ? `  follow: every ${ctx.config.follow.intervalSec}s — ${followed.filter((w) => w.enabled).length}/${followed.length} wallet(s) armed, ` +
+            `${(ctx.config.follow.positionSizePct * 100).toFixed(0)}% of free SOL per mirror` +
+            `, exit owned by ${ctx.config.follow.exclusiveExit ? "the followed wallet" : "local rules"}`
+        : `  follow: idle (follow.enabled=false) — watcher armed, starts within ${FOLLOW_BASE_TICK_MS / 1000}s of enabling it`,
+    );
 
     const healthMs = ctx.config.schedule.healthCheckIntervalMin * 60_000;
     scheduler.every(
@@ -663,6 +715,7 @@ async function main(): Promise<void> {
       shuttingDown = true;
       console.log(`\n${sig} — shutting down scheduler`);
       pollerHandle.stop();
+      followWatcher.stop();
       shutdownHive();
       shutdownInbound();
       if (dashboardBridge) void dashboardBridge.close();

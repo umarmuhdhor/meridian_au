@@ -350,7 +350,8 @@ The scheduler skips overlapping ticks per label (the `_busy` guard is built in).
 3. **Reverse reconcile** (added 2026-08-02): any tracked position marked open but
    NOT in the on-chain snap → flip `closed:true, closed_at:now` and note
    "reconciled: no longer on-chain". Catches historical ghost records + external
-   closes (pnl-poller direct chain call, Meteora UI, ad-hoc script). Without this,
+   closes (Meteora UI, ad-hoc script — and, before 2026-09-26, the pnl-poller's
+   direct chain call; see § PnL poller). Without this,
    `buildStateSummary` reports stale open counts (e.g. dashboard summary showed
    36 records vs 0 on-chain before the fix).
 4. **OHLCV enrichment** (`enrichPositionTechnicals`, 2026-08-29, fail-open like
@@ -385,6 +386,21 @@ The scheduler skips overlapping ticks per label (the `_busy` guard is built in).
   `pnl ≤ exitOorProxyPct`). Fires an immediate `fast_cut` action (no two-phase confirm);
   the position is skipped by the trailing scan that tick. Dark-launch default off = poller
   behaves exactly as before.
+- **Pnl warm-up** (`PNL_WARMUP_MINUTES` = 5, `close-rules.ts`, 2026-09-26): neither the
+  fast-cut nor `getExitDecision` acts on pnl for a position younger than 5 min. Meteora
+  datapi reads a fresh deposit as pnl −100% for a few seconds; the poller fast-cut
+  OTC-SOL and FLAME-SOL 3–5 s after deploy on that reading. The poller derives age
+  from `tracked.deployed_at` (the chain client leaves `age_minutes` null) and treats an
+  UNTRACKED position as age 0 — the deploy post-hook just hasn't written it yet.
+  Unknown age (`null`) is never warm-up, which is why management passes
+  `age_minutes ?? null`, not `?? 0`.
+- **Every close goes through the `close_position` tool** (`closeViaTool`,
+  `src/app/tools/close-via-tool.ts`), injected into the poller as `deps.closePosition`.
+  Telegram `/close` + `/closeall` use it too. **Never call `chain.closePosition` from
+  a cycle**: the tool's post-hooks are the ONLY writers of the performance record
+  (dashboard History), decision log, cooldown and `closed:true`. Until 2026-09-26 the
+  poller closed directly, so every smart-exit loss cut was missing from History and
+  only surfaced as a "reconciled: no longer on-chain" ghost.
 
 ---
 

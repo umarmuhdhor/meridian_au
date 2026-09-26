@@ -18,6 +18,24 @@ const MIN_TOTAL_VALUE_USD_FOR_SUSPECT = 0.01;
 const PNL_PCT_SUSPECT_FLOOR = -90;
 const MIN_LOW_YIELD_AGE_MINUTES = 60;
 
+/**
+ * Minutes after deploy during which the smart-exit engine refuses to act on pnl.
+ * Meteora datapi lags a fresh deposit: for the first seconds-to-minutes a brand-new
+ * position can read pnl −100% (balance not indexed yet). Without this window the
+ * poller's CATASTROPHIC fast-cut closed OTC-SOL and FLAME-SOL 3–5 s after they
+ * opened (2026-09-22/23). Deliberately short and separate from
+ * `stopLossGraceMinutes` (30 min, an IL-tolerance setting): this is a
+ * data-quality window, not a risk-tolerance one, so the hard floor stays a
+ * near-unconditional backstop.
+ */
+export const PNL_WARMUP_MINUTES = 5;
+
+/** True while a position is young enough that its pnl may not be indexed yet.
+ *  Unknown age → false (never suppress exits on missing data). */
+export function isInPnlWarmup(ageMinutes: number | null | undefined): boolean {
+  return ageMinutes != null && ageMinutes < PNL_WARMUP_MINUTES;
+}
+
 export function isPnlSuspect(
   position: Pick<LivePositionSnapshot, "pnl_pct" | "pnl_pct_suspicious" | "total_value_usd">,
   ctx: PnlSuspectContext = {},
@@ -163,6 +181,13 @@ export function getExitDecision(
   if (suspect || sig.pnl_pct == null) {
     return { action: "HOLD", regime: "AMBIGUOUS", reason: "pnl unpriceable — deferring to range rules" };
   }
+  if (isInPnlWarmup(sig.age_minutes)) {
+    return {
+      action: "HOLD",
+      regime: "OK",
+      reason: `pnl warm-up: age ${sig.age_minutes}m < ${PNL_WARMUP_MINUTES}m, datapi may not have indexed the deposit`,
+    };
+  }
   const pnl = sig.pnl_pct;
 
   // 2. CATASTROPHIC — unconditional backstop.
@@ -245,6 +270,7 @@ export function getExitDecision(
  *   - OOR-below AND pnl ≤ exitOorProxyPct (already this far below range — not
  *     recovering before the next 10-min management tick).
  * Returns a close reason, or null to leave it to the management cycle.
+ * Nothing fires inside the pnl warm-up window (see PNL_WARMUP_MINUTES).
  */
 export function getPollerFastCut(sig: ExitSignals, cfg: ManagementConfig, ctx: PnlSuspectContext = {}): string | null {
   const suspect = isPnlSuspect(
@@ -252,6 +278,7 @@ export function getPollerFastCut(sig: ExitSignals, cfg: ManagementConfig, ctx: P
     ctx,
   );
   if (suspect || sig.pnl_pct == null) return null;
+  if (isInPnlWarmup(sig.age_minutes)) return null;
   if (sig.pnl_pct <= cfg.exitHardFloorPct) {
     return `catastrophic: pnl ${sig.pnl_pct.toFixed(1)}% ≤ floor ${cfg.exitHardFloorPct}%`;
   }

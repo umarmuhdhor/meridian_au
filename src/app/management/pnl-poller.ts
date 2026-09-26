@@ -1,8 +1,6 @@
 import type { Clock } from "../../ports/clock.js";
 import type { Logger } from "../../ports/logger.js";
 import type { ChainClient } from "../../ports/chain-client.js";
-import type { SwapClient } from "../../ports/swap-client.js";
-import type { Notifier } from "../../ports/notifier.js";
 import type { Scheduler } from "../../ports/scheduler.js";
 import type { PositionRepo } from "../../ports/position-repo.js";
 import type { FollowRepo } from "../../ports/follow-repo.js";
@@ -12,8 +10,7 @@ import type { OnChainPosition, PositionsSnapshot } from "../../domain/schemas/ch
 import { assessPnl } from "../../domain/rules/pnl.js";
 import { partitionMirrorOwnership } from "../../domain/rules/follow-diff.js";
 import { getPollerFastCut } from "../../domain/rules/close-rules.js";
-import { consolidateBaseToSol } from "./consolidate.js";
-import { enrichCloseResult } from "../../domain/format/enrich-close.js";
+import type { CloseViaToolOutcome } from "../tools/close-via-tool.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_CONFIRM_DELAY_MS = 15_000;
@@ -70,6 +67,7 @@ export function tickPnlPoller(
           total_value_usd: p.total_value_usd ?? null,
           active_bin: p.active_bin,
           lower_bin: p.lower_bin,
+          age_minutes: p.age_minutes ?? null,
         },
         mgmt,
       );
@@ -142,9 +140,16 @@ export function tickPnlPoller(
 export interface PnlPollerDeps {
   clock: Clock;
   logger: Logger;
+  /** Read-only here (positions snapshot). Closes go through `closePosition`. */
   chain: ChainClient;
-  swap: SwapClient;
-  notifier: Notifier;
+  /**
+   * Performs the close. Production wires this to `closeViaTool` so the
+   * `close_position` post-hooks run — performance record (dashboard History),
+   * decision log, cooldown, mark-closed, Telegram card, base → SOL. Calling
+   * `chain.closePosition` here instead is what made fast-cut losses disappear
+   * from History. Should not throw (a throw is caught and logged anyway).
+   */
+  closePosition: (positionAddress: string, reason: string) => Promise<CloseViaToolOutcome>;
   scheduler: Scheduler;
   positionRepo: PositionRepo;
   config: ManagementConfig;
@@ -177,11 +182,11 @@ export interface PnlPollerHandle {
  *   1. Fetches positions with `force: true`.
  *   2. Merges the persisted `peak_pnl_pct` into each live snapshot.
  *   3. Calls `tickPnlPoller` for the pure decision.
- *   4. For every `close_confirmed` action, invokes `chain.closePosition` + notifier.
+ *   4. For every `close_confirmed` / `fast_cut` action, invokes `deps.closePosition`
+ *      (the `close_position` tool — see PnlPollerDeps.closePosition).
  *
  * Blocking write path: the closes only fire when the chain client's writes are armed
- * (MERIDIAN_WRITE_UNSAFE=true). Otherwise `chain.closePosition` will throw
- * `MeteoraWritePathNotPortedError`; the poller catches, logs, and moves on.
+ * (MERIDIAN_WRITE_UNSAFE=true). Otherwise the close fails; the poller logs and moves on.
  */
 export function createPnlPoller(deps: PnlPollerDeps): PnlPollerHandle {
   const pollIntervalMs = deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
@@ -218,15 +223,30 @@ export function createPnlPoller(deps: PnlPollerDeps): PnlPollerHandle {
         followHeld.size > 0
           ? snap.positions.filter((p) => !followHeld.has(p.position))
           : snap.positions;
-      // Merge peak_pnl_pct from the persisted state into the live snapshot in-place.
+      // Merge peak_pnl_pct and age from the persisted state into the live snapshot.
+      // The chain client leaves age_minutes null; the fast-cut needs it for the pnl
+      // warm-up. A position with NO tracked record yet is one the deploy post-hook
+      // hasn't written — i.e. seconds old — so it is treated as age 0 (in warm-up).
+      // The management cycle forward-reconciles genuinely external positions into
+      // tracking within one cycle, after which they get a real age.
+      const nowMs = deps.clock.now().getTime();
       const withPeak: PositionsSnapshot = {
         ...snap,
         total_positions: eligible.length,
         positions: await Promise.all(
           eligible.map(async (p) => {
             const tracked = await deps.positionRepo.get(p.position);
+            const deployedMs = tracked?.deployed_at ? Date.parse(tracked.deployed_at) : NaN;
+            const age =
+              p.age_minutes ??
+              (!tracked
+                ? 0
+                : Number.isFinite(deployedMs)
+                  ? Math.max(0, Math.floor((nowMs - deployedMs) / 60_000))
+                  : null);
             return {
               ...p,
+              age_minutes: age,
               _peakPnlPct: tracked?.peak_pnl_pct ?? null,
             } as OnChainPosition;
           }),
@@ -247,26 +267,11 @@ export function createPnlPoller(deps: PnlPollerDeps): PnlPollerHandle {
           deps.logger.warn("pnl-poller", `${label} for ${a.positionAddress.slice(0, 8)}…`, {
             reason: a.reason,
           });
-          const preClose = withPeak.positions.find((p) => p.position === a.positionAddress);
-          const rawResult = await deps.chain.closePosition(a.positionAddress, a.reason);
-          const peak = (preClose as { _peakPnlPct?: number | null } | undefined)?._peakPnlPct ?? null;
-          const result = enrichCloseResult(rawResult, preClose, peak);
-          if (result.success) {
-            await deps.notifier.notifyClose(result);
-            // Sell the withdrawn base token back to SOL (never throws).
-            await consolidateBaseToSol(
-              {
-                chain: deps.chain,
-                swap: deps.swap,
-                notifier: deps.notifier,
-                logger: deps.logger,
-                slippageBps: deps.config.autoSwapSlippageBps,
-                minUsd: deps.config.autoSwapMinUsd,
-                retries: deps.config.consolidateRetries,
-                retryDelayMs: deps.config.consolidateRetryDelayMs,
-              },
-              result.base_mint,
-            );
+          const outcome = await deps.closePosition(a.positionAddress, a.reason);
+          if (!outcome.ok) {
+            deps.logger.error("pnl-poller", `close failed for ${a.positionAddress.slice(0, 8)}…`, {
+              error: outcome.error,
+            });
           }
         } catch (err) {
           deps.logger.error(

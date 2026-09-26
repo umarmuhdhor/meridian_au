@@ -60,6 +60,7 @@ import type { TokenInfoClient } from "../ports/token-info-client.js";
 import type { RugCheckClient } from "../ports/rug-check.js";
 import type { SmartWalletChecker } from "../ports/smart-wallet-checker.js";
 import { createRegistry } from "../app/tools/registry.js";
+import { closeViaTool } from "../app/tools/close-via-tool.js";
 import { getPoolMemoryTool } from "../app/tools/impls/get-pool-memory.js";
 import { assertPoolDeployableTool } from "../app/tools/impls/assert-pool-deployable.js";
 import { getWalletBalanceTool } from "../app/tools/impls/get-wallet-balance.js";
@@ -591,8 +592,9 @@ async function main(): Promise<void> {
       clock: ctx.clock,
       logger: ctx.logger,
       chain: ctx.chain,
-      swap: ctx.swap,
-      notifier: ctx.notifier,
+      // Through the close_position tool so the close lands in History (performance
+      // record), the decision log and cooldowns — not just on-chain.
+      closePosition: (address, reason) => closeViaTool(registry, ctx, address, reason, "MANAGER"),
       scheduler,
       positionRepo: ctx.repos.positions,
       config: ctx.config.management,

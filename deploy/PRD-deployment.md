@@ -1,5 +1,13 @@
 # PRD — Meridian Production Deployment (vivobook home server)
 
+> ⚠️ **HISTORICAL — superseded by [`deploy/homeserver/README.md`](homeserver/README.md).**
+> This document describes the retired vivobook / Docker / Cloudflare-Access setup
+> (`calisto.nafidinara.com`, GitHub Actions auto-deploy, Sage delegation over
+> `sage-api.nafidinara.com`). Meridian now runs on a Windows homeserver as pm2
+> processes behind a Cloudflare Tunnel at `au.alieffauzan.com`, with **no CI deploy
+> pipeline** and **Sage disabled** (no `SAGE_*` env → local ReAct loop decider).
+> Kept for history only. Do not follow these steps against the current box.
+
 > **⚠️ HISTORICAL** — this was the original design for the vivobook home server
 > (single container, Caddy + Cloudflare Tunnel). Production ran on a Tencent HK
 > VPS with a split-container + CI/CD setup from 2026-07 through 2026-08-01, then

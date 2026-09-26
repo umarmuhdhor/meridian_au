@@ -4,8 +4,8 @@ import { consolidateBaseToSol } from "../../management/consolidate.js";
 
 /**
  * After a successful `close_position`, sell the withdrawn base token back to SOL.
- * Covers every close that goes through the tool (management cycle + dashboard /tool).
- * Direct `chain.closePosition` callers (pnl-poller, telegram) call the helper themselves.
+ * Covers every close: management, follow, pnl-poller and Telegram all close through the
+ * tool (`closeViaTool`), as does the dashboard /tool route.
  *
  * Post-hook failures are swallowed by the executor — and the helper never throws — so a
  * failed consolidation can never break a close.

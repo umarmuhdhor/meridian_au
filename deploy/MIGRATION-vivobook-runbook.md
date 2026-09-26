@@ -1,5 +1,13 @@
 # Meridian — Vivobook Migration Runbook
 
+> ⚠️ **HISTORICAL — superseded by [`deploy/homeserver/README.md`](homeserver/README.md).**
+> This document describes the retired vivobook / Docker / Cloudflare-Access setup
+> (`calisto.nafidinara.com`, GitHub Actions auto-deploy, Sage delegation over
+> `sage-api.nafidinara.com`). Meridian now runs on a Windows homeserver as pm2
+> processes behind a Cloudflare Tunnel at `au.alieffauzan.com`, with **no CI deploy
+> pipeline** and **Sage disabled** (no `SAGE_*` env → local ReAct loop decider).
+> Kept for history only. Do not follow these steps against the current box.
+
 > **✅ STATUS: COMPLETED 2026-08-02.** Migration from Tencent HK VPS →
 > vivobook home server executed successfully. Sage delegation moved from
 > CF-tunneled HTTPS to intra-host docker (`host.docker.internal:8643`).

@@ -8,12 +8,17 @@ import { createDryRunChainClient } from "../../src/adapters/chain/dry-run.js";
 import { createCollectingNotifier, type CollectingNotifier } from "../../src/adapters/notify/collecting-notifier.js";
 import { fixedClock } from "../../src/ports/clock.js";
 import { makeCtx } from "./tool-context.js";
+import { createRegistry } from "../../src/app/tools/registry.js";
+import { closePositionTool } from "../../src/app/tools/impls/close-position.js";
 
 const throwingLlm: LLMClient = {
   chat: async () => {
     throw new Error("LLM should not be invoked for control commands");
   },
 };
+
+// /close and /closeall go through the close_position tool (History + decision log).
+const closeRegistry = createRegistry([closePositionTool]);
 
 const emptyRegistry: ToolRegistry = {
   list: () => [],
@@ -223,7 +228,7 @@ describe("routeTelegramMessage — control commands", () => {
     const ctx = makeCtx({ notifier, chain });
 
     await routeTelegramMessage(
-      { ctx, llm: throwingLlm, registry: emptyRegistry, model: "x", writesEnabled: true },
+      { ctx, llm: throwingLlm, registry: closeRegistry, model: "x", writesEnabled: true },
       msg("/close 2"),
     );
 
@@ -297,7 +302,7 @@ describe("routeTelegramMessage — control commands", () => {
     const ctx = makeCtx({ notifier, chain });
 
     await routeTelegramMessage(
-      { ctx, llm: throwingLlm, registry: emptyRegistry, model: "x", writesEnabled: true },
+      { ctx, llm: throwingLlm, registry: closeRegistry, model: "x", writesEnabled: true },
       msg("/closeall"),
     );
 

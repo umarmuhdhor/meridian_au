@@ -1,0 +1,38 @@
+{
+  "_comment": "Isi massal untuk Feed. Edit file ini, lalu: node scripts/seed-feed.mjs --dry-run (pratinjau), node scripts/seed-feed.mjs (tulis). Aman dijalankan berulang: lesson dengan teks yang sama dilewati, tidak duplikat. Tidak perlu restart daemon.",
+
+  "_lessons_help": "Boleh string biasa, atau objek {rule, tags, pinned, role}. Maks 500 karakter (dipotong otomatis). Komparator < dan > AMAN dipakai. pinned:true = selalu ikut ke prompt; yang tidak pinned hanya 5 terbaru yang ikut.",
+  "lessons": [
+    {
+      "rule": "AVOID entry saat 1h from_window_high_pct < -30% walau trend=UP. Dead-cat bounce di bawah puncak sering lanjut turun; gate drawdown ada untuk ini.",
+      "tags": ["ta", "entry"],
+      "pinned": true
+    },
+    {
+      "rule": "AVOID pool dengan 1h atr_pct > 25%. Volatilitas sebesar itu membuat posisi keluar range sebelum fee sempat terkumpul.",
+      "tags": ["ta", "entry"],
+      "pinned": true
+    },
+    {
+      "rule": "PREFER pool yang punya nearest_support jelas dengan support_distance_pct kecil. Entry tepat di atas support memberi batas risiko yang terbaca.",
+      "tags": ["ta", "entry"],
+      "pinned": false
+    },
+    {
+      "rule": "AVOID entry saat at_local_top true DAN spike_pct tinggi. Masuk di puncak spike membuat range langsung terlewati ke bawah.",
+      "tags": ["ta", "entry"],
+      "pinned": false
+    },
+    {
+      "rule": "WORKED: pool dengan fee_per_tvl_24h tinggi dan harga range-bound menghasilkan fee stabil tanpa sering keluar range.",
+      "tags": ["yield"],
+      "pinned": false
+    }
+  ],
+
+  "_strategies_help": "Wajib: id, name, lp_strategy (spot|curve|bid_ask|any|mixed). Sisanya opsional, akan jadi null. id yang sama akan ditimpa.",
+  "strategies": [],
+
+  "_active_help": "Opsional. Kosongkan (hapus barisnya) kalau tidak mau mengubah strategi aktif. Harus salah satu id yang ada.",
+  "activeStrategy": null
+}

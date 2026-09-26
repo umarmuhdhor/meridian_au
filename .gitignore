@@ -9,6 +9,7 @@ node_modules/
 
 # User config (contains RPC URL, wallet key, API keys)
 user-config.json
+user-config.json.bak-*
 
 # GMGN fee-source config (contains API key)
 gmgn-config.json
@@ -55,3 +56,6 @@ dist/
 # Vitest coverage
 coverage/
 
+
+# Feed seed berisi lesson/strategi milik operator (edge dagang). Repo ini publik.
+deploy/homeserver/feed-seed.local.json

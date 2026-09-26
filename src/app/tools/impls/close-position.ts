@@ -34,7 +34,13 @@ export const closePositionTool = defineTool({
     } catch {
       snapshot = undefined;
     }
+    // Peak lives only in the tracked record (the live snapshot doesn't carry it);
+    // the close card shows it for trailing-TP exits.
+    const peak = await ctx.repos.positions
+      .get(position_address)
+      .then((t) => t?.peak_pnl_pct ?? null)
+      .catch(() => null);
     const raw = await ctx.chain.closePosition(position_address, reason);
-    return enrichCloseResult(raw, snapshot);
+    return enrichCloseResult(raw, snapshot, peak);
   },
 });

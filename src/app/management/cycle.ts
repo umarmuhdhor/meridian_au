@@ -205,7 +205,9 @@ export function planForPosition(
     lower_bin: position.lower_bin,
     minutes_out_of_range: position.minutes_out_of_range ?? 0,
     fee_per_tvl_24h: position.fee_per_tvl_24h ?? null,
-    age_minutes: position.age_minutes ?? 0,
+    // null (not 0) when unknown: the smart-exit pnl warm-up treats age 0 as
+    // "just deployed" and would hold an untracked position's exits forever.
+    age_minutes: position.age_minutes ?? null,
   };
 
   if (mgmt.smartExitEnabled) {

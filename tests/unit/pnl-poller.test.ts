@@ -2,15 +2,18 @@ import { describe, it, expect, vi } from "vitest";
 import type { Clock } from "../../src/ports/clock.js";
 import { nullLogger } from "../../src/ports/logger.js";
 import type { ChainClient } from "../../src/ports/chain-client.js";
-import type { SwapClient } from "../../src/ports/swap-client.js";
-import type { SwapArgs } from "../../src/domain/schemas/chain.js";
-import type { Notifier } from "../../src/ports/notifier.js";
 import type { PositionRepo } from "../../src/ports/position-repo.js";
 import type { ManagementConfig } from "../../src/domain/schemas/config.js";
 import type {
+  CloseResult,
   OnChainPosition,
   PositionsSnapshot,
 } from "../../src/domain/schemas/chain.js";
+import { closeViaTool, type CloseViaToolOutcome } from "../../src/app/tools/close-via-tool.js";
+import { closePositionTool } from "../../src/app/tools/impls/close-position.js";
+import { createRegistry } from "../../src/app/tools/registry.js";
+import { createDryRunChainClient } from "../../src/adapters/chain/dry-run.js";
+import { makeCtx } from "./tool-context.js";
 import type { TrackedPosition } from "../../src/domain/schemas/position.js";
 import {
   createPnlPoller,
@@ -205,11 +208,9 @@ describe("tickPnlPoller — pure", () => {
 });
 
 describe("createPnlPoller — orchestration", () => {
-  function fakeChain(
-    snapshot: PositionsSnapshot,
-    closeSpy: ReturnType<typeof vi.fn>,
-    walletTokens: { mint: string; symbol: string | null; balance: number; raw?: string; usd: number | null }[] = [],
-  ): ChainClient {
+  // Read-only chain: the poller must never close through it directly — closes go
+  // through deps.closePosition (the close_position tool) so History records them.
+  function fakeChain(snapshot: PositionsSnapshot): ChainClient {
     return {
       async getWalletBalance() {
         throw new Error("nope");
@@ -221,33 +222,16 @@ describe("createPnlPoller — orchestration", () => {
         return snapshot;
       },
       async getWalletTokens() {
-        return walletTokens;
+        return [];
       },
       async deployPosition() {
         throw new Error("nope");
       },
-      closePosition: closeSpy as unknown as ChainClient["closePosition"],
+      async closePosition() {
+        throw new Error("poller must close via deps.closePosition, not chain.closePosition");
+      },
       async claimFees() {
         throw new Error("nope");
-      },
-    };
-  }
-
-  function fakeSwap(): SwapClient & { calls: SwapArgs[] } {
-    const calls: SwapArgs[] = [];
-    return {
-      calls,
-      async swap(args) {
-        calls.push(args);
-        return {
-          success: true,
-          input_mint: args.input_mint,
-          output_mint: args.output_mint,
-          amount_in: args.amount_in,
-          amount_out: args.amount_in,
-          tx: "swap-sig",
-          dry_run: false,
-        };
       },
     };
   }
@@ -269,35 +253,8 @@ describe("createPnlPoller — orchestration", () => {
     };
   }
 
-  function fakeNotifier(): Notifier & { closes: unknown[] } {
-    const closes: unknown[] = [];
+  function trackedPos(over: Partial<TrackedPosition> = {}): TrackedPosition {
     return {
-      async notify() {},
-      async notifyDeploy() {},
-      async notifyClose(r) {
-        closes.push(r);
-      },
-      async notifyClaim() {},
-      async notifySwap() {},
-      async notifyOutOfRange() {},
-      async startLive() {
-        return {
-          toolStart: async () => {},
-          toolFinish: async () => {},
-          note: async () => {},
-          finalize: async () => {},
-          fail: async () => {},
-        };
-      },
-      closes,
-    };
-  }
-
-  it("fires close_confirmed after a trailing drop persists across two ticks", async () => {
-    const clock = mutableClock("2026-07-05T12:00:00.000Z");
-    const scheduler = createManualScheduler(clock.now().getTime());
-    let currentSnap = snap(makeLive({ pnl_pct: 7 })); // peak-drop already
-    const tracked: TrackedPosition = {
       position: "Pos1",
       pool: "PoolA",
       pool_name: "MEME/SOL",
@@ -308,8 +265,13 @@ describe("createPnlPoller — orchestration", () => {
       deployed_at: "2026-07-05T10:00:00.000Z",
       peak_pnl_pct: 10,
       trailing_active: true,
-    };
-    const closeSpy = vi.fn(async () => ({
+      ...over,
+    } as TrackedPosition;
+  }
+
+  const okClose = (): CloseViaToolOutcome => ({
+    ok: true,
+    result: {
       success: true,
       position_address: "Pos1",
       pool_address: "PoolA",
@@ -320,19 +282,20 @@ describe("createPnlPoller — orchestration", () => {
       reason: "trailing",
       tx: "SIG_1",
       dry_run: false,
-    }));
-    const notifier = fakeNotifier();
-    const swap = fakeSwap();
+    } as CloseResult,
+  });
+
+  it("fires close_confirmed after a trailing drop persists across two ticks", async () => {
+    const clock = mutableClock("2026-07-05T12:00:00.000Z");
+    const scheduler = createManualScheduler(clock.now().getTime());
+    const closeSpy = vi.fn(async (_a: string, _r: string) => okClose());
     const poller = createPnlPoller({
       clock,
       logger: nullLogger,
-      chain: fakeChain(currentSnap, closeSpy, [
-        { mint: "MintA", symbol: null, balance: 1000, raw: "1000000000", usd: 50 },
-      ]),
-      swap,
-      notifier,
+      chain: fakeChain(snap(makeLive({ pnl_pct: 7 }))), // peak-drop already
+      closePosition: closeSpy,
       scheduler,
-      positionRepo: fakePositionRepo({ Pos1: tracked }),
+      positionRepo: fakePositionRepo({ Pos1: trackedPos() }),
       config: mgmt,
       pollIntervalMs: 30_000,
       confirmDelayMs: 15_000,
@@ -349,63 +312,145 @@ describe("createPnlPoller — orchestration", () => {
     await scheduler.advance(30_000);
     clock.advance(30_000);
     expect(closeSpy).toHaveBeenCalledTimes(1);
-    expect(closeSpy.mock.calls[0]![0]).toBe("Pos1");
-    expect(notifier.closes).toHaveLength(1);
+    expect(closeSpy.mock.calls[0]).toEqual(["Pos1", expect.stringMatching(/^Trailing TP confirmed/)]);
     expect(poller.peekPending()).toHaveLength(0);
-
-    // Auto-swap: the withdrawn base (MintA) is consolidated to SOL after the close,
-    // at the exact raw amount and the config-driven slippage (mgmt.autoSwapSlippageBps).
-    expect(swap.calls).toHaveLength(1);
-    expect(swap.calls[0]).toMatchObject({
-      input_mint: "MintA",
-      output_mint: "So11111111111111111111111111111111111111112",
-      amount_in_raw: "1000000000",
-      slippage_bps: 250,
-    });
 
     poller.stop();
   });
 
-  it("swallows close errors (e.g. writes not armed) without stopping the poller", async () => {
+  it("survives a failed or throwing close without stopping the poller", async () => {
     const clock = mutableClock("2026-07-05T12:00:00.000Z");
     const scheduler = createManualScheduler(clock.now().getTime());
-    const currentSnap = snap(makeLive({ pnl_pct: 7 }));
-    const tracked: TrackedPosition = {
-      position: "Pos1",
-      pool: "PoolA",
-      pool_name: "MEME/SOL",
-      strategy: "bid_ask",
-      bin_range: { min: -20, max: 20 },
-      amount_sol: 0.5,
-      active_bin_at_deploy: 0,
-      deployed_at: "2026-07-05T10:00:00.000Z",
-      peak_pnl_pct: 10,
-      trailing_active: true,
-    };
-    const closeSpy = vi.fn(async () => {
-      throw new Error("writes not armed");
-    });
-    const notifier = fakeNotifier();
+    const closeSpy = vi
+      .fn<(a: string, r: string) => Promise<CloseViaToolOutcome>>()
+      .mockResolvedValueOnce({ ok: false, error: "execute_failed: writes not armed" })
+      .mockRejectedValueOnce(new Error("boom"));
     const poller = createPnlPoller({
       clock,
       logger: nullLogger,
-      chain: fakeChain(currentSnap, closeSpy),
-      swap: fakeSwap(),
-      notifier,
+      chain: fakeChain(snap(makeLive({ pnl_pct: 7 }))),
+      closePosition: closeSpy,
       scheduler,
-      positionRepo: fakePositionRepo({ Pos1: tracked }),
+      positionRepo: fakePositionRepo({ Pos1: trackedPos() }),
       config: mgmt,
       pollIntervalMs: 30_000,
       confirmDelayMs: 15_000,
       confirmTolerancePct: 1,
     });
-    await scheduler.advance(30_000);
-    clock.advance(30_000);
-    await scheduler.advance(30_000);
-    clock.advance(30_000);
-    expect(closeSpy).toHaveBeenCalledTimes(1);
-    expect(notifier.closes).toHaveLength(0);
+    for (let i = 0; i < 4; i++) {
+      await scheduler.advance(30_000);
+      clock.advance(30_000);
+    }
+    // queue → fail → re-queue → throw: both attempts made, poller still alive.
+    expect(closeSpy).toHaveBeenCalledTimes(2);
     expect(poller.peekPending()).toHaveLength(0);
+    poller.stop();
+  });
+
+  const smart: ManagementConfig = { ...mgmt, smartExitEnabled: true, exitHardFloorPct: -25, exitOorProxyPct: -12 };
+
+  it("does NOT fast-cut inside the pnl warm-up window (datapi −100% on a fresh deploy)", async () => {
+    const clock = mutableClock("2026-07-05T12:00:00.000Z");
+    const scheduler = createManualScheduler(clock.now().getTime());
+    const closeSpy = vi.fn(async (_a: string, _r: string) => okClose());
+    const poller = createPnlPoller({
+      clock,
+      logger: nullLogger,
+      chain: fakeChain(snap(makeLive({ pnl_pct: -100, age_minutes: null }))),
+      closePosition: closeSpy,
+      scheduler,
+      // deployed ~3 s before the first tick fires — the OTC-SOL / FLAME-SOL case
+      positionRepo: fakePositionRepo({
+        Pos1: trackedPos({ deployed_at: "2026-07-05T11:59:57.000Z", peak_pnl_pct: 0 }),
+      }),
+      config: smart,
+      pollIntervalMs: 30_000,
+    });
+    await scheduler.advance(30_000);
+    expect(closeSpy).not.toHaveBeenCalled();
+    poller.stop();
+  });
+
+  it("treats a not-yet-tracked position as fresh (deploy hook has not written it yet)", async () => {
+    const clock = mutableClock("2026-07-05T12:00:00.000Z");
+    const scheduler = createManualScheduler(clock.now().getTime());
+    const closeSpy = vi.fn(async (_a: string, _r: string) => okClose());
+    const poller = createPnlPoller({
+      clock,
+      logger: nullLogger,
+      chain: fakeChain(snap(makeLive({ pnl_pct: -100, age_minutes: null }))),
+      closePosition: closeSpy,
+      scheduler,
+      positionRepo: fakePositionRepo({}),
+      config: smart,
+      pollIntervalMs: 30_000,
+    });
+    await scheduler.advance(30_000);
+    expect(closeSpy).not.toHaveBeenCalled();
+    poller.stop();
+  });
+
+  it("still fast-cuts a genuinely old position", async () => {
+    const clock = mutableClock("2026-07-05T12:00:00.000Z");
+    const scheduler = createManualScheduler(clock.now().getTime());
+    const closeSpy = vi.fn(async (_a: string, _r: string) => okClose());
+    const poller = createPnlPoller({
+      clock,
+      logger: nullLogger,
+      chain: fakeChain(snap(makeLive({ pnl_pct: -30, age_minutes: null }))),
+      closePosition: closeSpy,
+      scheduler,
+      positionRepo: fakePositionRepo({ Pos1: trackedPos({ peak_pnl_pct: 0 }) }),
+      config: smart,
+      pollIntervalMs: 30_000,
+    });
+    await scheduler.advance(30_000);
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(closeSpy.mock.calls[0]).toEqual(["Pos1", expect.stringMatching(/catastrophic/)]);
+    poller.stop();
+  });
+
+  // Regression (2026-09-26): six smart-exit loss cuts were missing from the dashboard
+  // History because the poller called chain.closePosition directly and skipped the
+  // close_position post-hooks. Wire the real tool and assert the close is recorded.
+  it("a fast-cut close lands in History (performance record) and the decision log", async () => {
+    const clock = mutableClock("2026-07-05T12:00:00.000Z");
+    const scheduler = createManualScheduler(clock.now().getTime());
+    const chain = createDryRunChainClient({
+      clock,
+      seed: {
+        positions: [
+          makeLive({
+            pnl_pct: -30,
+            age_minutes: null,
+            deployed_at: "2026-07-05T10:00:00.000Z",
+            amount_sol: 0.5,
+          }),
+        ],
+      },
+    });
+    const base = makeCtx();
+    const ctx = makeCtx({ clock, chain, config: { ...base.config, management: smart } });
+    const registry = createRegistry([closePositionTool]);
+    const poller = createPnlPoller({
+      clock,
+      logger: nullLogger,
+      chain,
+      closePosition: (a, r) => closeViaTool(registry, ctx, a, r, "MANAGER"),
+      scheduler,
+      positionRepo: fakePositionRepo({ Pos1: trackedPos({ peak_pnl_pct: 0 }) }),
+      config: smart,
+      pollIntervalMs: 30_000,
+    });
+
+    await scheduler.advance(30_000);
+
+    expect(chain.peekPositions()).toHaveLength(0);
+    const perf = await ctx.repos.lessons.recentPerformance(10);
+    expect(perf).toHaveLength(1);
+    expect(perf[0]).toMatchObject({ position: "Pos1", close_reason: expect.stringMatching(/catastrophic/) });
+    const decisions = await ctx.repos.decisions.recent(10);
+    expect(decisions.some((d) => d.type === "close" && d.position === "Pos1" && d.actor === "MANAGER")).toBe(true);
     poller.stop();
   });
 });

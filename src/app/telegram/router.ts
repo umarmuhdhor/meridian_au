@@ -7,8 +7,7 @@ import { runAgentLoop } from "../agent/loop.js";
 import { buildSystemPrompt } from "../../domain/prompt/builder.js";
 import { GENERAL_TOOLS } from "../../domain/prompt/role-tools.js";
 import { runBriefingCycle } from "../briefing/cycle.js";
-import { consolidateBaseToSol } from "../management/consolidate.js";
-import { enrichCloseResult } from "../../domain/format/enrich-close.js";
+import { closeViaTool } from "../tools/close-via-tool.js";
 
 export interface TelegramRouterDeps {
   ctx: AppContext;
@@ -157,28 +156,11 @@ export async function routeTelegramMessage(
         `Closing #${idx} ${target.pair} (${target.position.slice(0, 8)}…)…`,
       );
       try {
-        const rawResult = await deps.ctx.chain.closePosition(target.position, "telegram /close");
-        const result = enrichCloseResult(rawResult, target);
-        if (result.success) {
-          await deps.ctx.notifier.notifyClose(result);
-          await consolidateBaseToSol(
-            {
-              chain: deps.ctx.chain,
-              swap: deps.ctx.swap,
-              notifier: deps.ctx.notifier,
-              logger: deps.ctx.logger,
-              slippageBps: deps.ctx.config.management.autoSwapSlippageBps,
-              minUsd: deps.ctx.config.management.autoSwapMinUsd,
-              retries: deps.ctx.config.management.consolidateRetries,
-              retryDelayMs: deps.ctx.config.management.consolidateRetryDelayMs,
-            },
-            result.base_mint,
-          );
-        } else {
-          await deps.ctx.notifier.notify(
-            "warn",
-            `⚠️ Close returned failure (reason=${result.reason}).`,
-          );
+        // Via the close_position tool: its post-hooks send the close card, record
+        // History, log the decision and consolidate base → SOL.
+        const outcome = await closeViaTool(deps.registry, deps.ctx, target.position, "telegram /close", "GENERAL");
+        if (!outcome.ok) {
+          await deps.ctx.notifier.notify("warn", `⚠️ Close failed: ${outcome.error}`);
         }
       } catch (err) {
         deps.ctx.logger.warn("telegram-router", "close threw", {
@@ -216,16 +198,15 @@ export async function routeTelegramMessage(
       let fail = 0;
       for (const p of snap.positions) {
         try {
-          const rawResult = await deps.ctx.chain.closePosition(p.position, "telegram /closeall");
-          const result = enrichCloseResult(rawResult, p);
-          if (result.success) {
-            ok += 1;
-            await deps.ctx.notifier.notifyClose(result);
-            await consolidateBaseToSol(
-              { chain: deps.ctx.chain, swap: deps.ctx.swap, notifier: deps.ctx.notifier, logger: deps.ctx.logger },
-              result.base_mint,
-            );
-          } else fail += 1;
+          const outcome = await closeViaTool(deps.registry, deps.ctx, p.position, "telegram /closeall", "GENERAL");
+          if (outcome.ok) ok += 1;
+          else {
+            fail += 1;
+            deps.ctx.logger.warn("telegram-router", "closeall item failed", {
+              position: p.position,
+              error: outcome.error,
+            });
+          }
         } catch (err) {
           fail += 1;
           deps.ctx.logger.warn("telegram-router", "closeall item threw", {

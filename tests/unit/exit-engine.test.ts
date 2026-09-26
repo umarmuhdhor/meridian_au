@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { getExitDecision, getPollerFastCut, type ExitSignals } from "../../src/domain/rules/close-rules.js";
+import {
+  getExitDecision,
+  getPollerFastCut,
+  PNL_WARMUP_MINUTES,
+  type ExitSignals,
+} from "../../src/domain/rules/close-rules.js";
 import type { ManagementConfig } from "../../src/domain/schemas/config.js";
 import type { TechnicalsSummary } from "../../src/domain/schemas/kline.js";
 import { mgmt } from "./fixtures.js";
@@ -141,5 +146,35 @@ describe("getPollerFastCut — on-chain fast-cut", () => {
     expect(
       getPollerFastCut({ pnl_pct: -80, pnl_pct_suspicious: true, active_bin: -500, lower_bin: -449 }, cfg),
     ).toBeNull();
+  });
+});
+
+// Meteora datapi lags a fresh deposit and reads pnl −100% for the first seconds.
+// OTC-SOL / FLAME-SOL were fast-cut 3–5 s after deploy on exactly that reading.
+describe("pnl warm-up window (fresh positions)", () => {
+  it("fast-cut does NOT fire on a −100% reading inside the warm-up window", () => {
+    expect(getPollerFastCut({ pnl_pct: -100, active_bin: 5, lower_bin: 0, age_minutes: 0 }, cfg)).toBeNull();
+    expect(
+      getPollerFastCut({ pnl_pct: -30, active_bin: -500, lower_bin: -449, age_minutes: PNL_WARMUP_MINUTES - 1 }, cfg),
+    ).toBeNull();
+  });
+
+  it("fast-cut fires again once the window has passed", () => {
+    expect(
+      getPollerFastCut({ pnl_pct: -30, active_bin: 5, lower_bin: 0, age_minutes: PNL_WARMUP_MINUTES }, cfg),
+    ).toMatch(/catastrophic/);
+  });
+
+  it("unknown age is never treated as warm-up (exits are not suppressed on missing data)", () => {
+    expect(getPollerFastCut({ pnl_pct: -30, active_bin: 5, lower_bin: 0, age_minutes: null }, cfg)).toMatch(
+      /catastrophic/,
+    );
+    expect(getExitDecision({ ...inRangeBase, pnl_pct: -30, age_minutes: null }, cfg).regime).toBe("CATASTROPHIC");
+  });
+
+  it("regime engine holds a fresh position instead of classifying it CATASTROPHIC", () => {
+    const d = getExitDecision({ ...inRangeBase, pnl_pct: -100, age_minutes: 1 }, cfg);
+    expect(d.action).toBe("HOLD");
+    expect(d.reason).toMatch(/warm-up/);
   });
 });

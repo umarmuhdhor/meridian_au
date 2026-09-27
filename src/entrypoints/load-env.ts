@@ -8,7 +8,7 @@
  *
  * A no-op in production:
  *  - `.env` / `.env.*` are in `.dockerignore`, so the image never carries one.
- *  - dotenv does not override an already-set variable, so `docker-compose.yml` env wins.
+ *  - dotenv does not override an already-set variable, so container / pm2 env wins.
  */
 import { config } from "dotenv";
 

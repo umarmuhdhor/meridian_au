@@ -1,6 +1,7 @@
 import type {
   ActiveBin,
   ClaimResult,
+  ClosedPositionPnl,
   CloseResult,
   DeployArgs,
   DeployResult,
@@ -34,4 +35,10 @@ export interface ChainClient {
   deployPosition(args: DeployArgs): Promise<DeployResult>;
   closePosition(positionAddress: string, reason: string): Promise<CloseResult>;
   claimFees(positionAddress: string): Promise<ClaimResult>;
+  /**
+   * Optional: settled PnL totals for one of OUR closed positions. Resolves `null` when
+   * the position is not (yet) in the source's closed set, or the read failed — both
+   * mean "ask again later", never "zero". Adapters without a closed-PnL source omit it.
+   */
+  getClosedPositionPnl?(poolAddress: string, positionAddress: string): Promise<ClosedPositionPnl | null>;
 }

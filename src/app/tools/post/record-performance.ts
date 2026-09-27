@@ -3,6 +3,7 @@ import type { CloseResult } from "../../../domain/schemas/chain.js";
 import type { PerformanceRecord } from "../../../domain/schemas/lesson.js";
 import type { KlineTimeframe, TechnicalsSummary } from "../../../domain/schemas/kline.js";
 import { computeTechnicals } from "../../../domain/format/technicals.js";
+import { estimateClosePnl } from "../../../domain/format/close-pnl.js";
 
 const EXIT_TECHNICALS_TIMEFRAMES: readonly KlineTimeframe[] = ["15m", "1h"] as const;
 const EXIT_TECHNICALS_LIMIT = 100;
@@ -40,18 +41,20 @@ export const recordPerformanceHook: PostHook<
   }
 
   const amountSol = result.amount_sol_initial ?? tracked?.amount_sol ?? null;
+  // Meteora's recorded deposit first — the same basis `final_value_usd` and the fees
+  // are measured against. The tracked value is our own deploy-time guess.
   const initialValueUsd =
+    result.initial_value_usd ??
     tracked?.initial_value_usd ??
     (amountSol != null && solPrice != null ? amountSol * solPrice : null);
-  const finalValueUsd = result.final_value_usd ?? null;
-  const pnlPct = result.final_pnl_pct ?? 0;
-
-  let pnlUsd = 0;
-  if (finalValueUsd != null && initialValueUsd != null) {
-    pnlUsd = finalValueUsd - initialValueUsd;
-  } else if (initialValueUsd != null) {
-    pnlUsd = (initialValueUsd * pnlPct) / 100;
-  }
+  // An estimate; the management cycle replaces it with Meteora's settled totals once
+  // the close is indexed (finalize-performance.ts).
+  const est = estimateClosePnl({
+    initialValueUsd,
+    finalValueUsd: result.final_value_usd ?? null,
+    feesUsd: result.fees_earned_usd,
+    fallbackPnlPct: result.final_pnl_pct,
+  });
 
   const now = ctx.clock.now();
   const deployedAtMs = tracked?.deployed_at ? Date.parse(tracked.deployed_at) : NaN;
@@ -104,11 +107,12 @@ export const recordPerformanceHook: PostHook<
     position: args.position_address,
     pool: result.pool_address,
     pool_name: tracked?.pool_name ?? result.pair ?? null,
-    pnl_pct: pnlPct,
-    pnl_usd: Math.round(pnlUsd * 100) / 100,
-    fees_earned_usd: result.fees_earned_usd,
-    ...(initialValueUsd != null ? { initial_value_usd: initialValueUsd } : {}),
-    ...(finalValueUsd != null ? { final_value_usd: finalValueUsd } : {}),
+    pnl_pct: est.pnl_pct,
+    pnl_usd: est.pnl_usd,
+    fees_earned_usd: est.fees_earned_usd,
+    ...(est.initial_value_usd != null ? { initial_value_usd: est.initial_value_usd } : {}),
+    ...(est.final_value_usd != null ? { final_value_usd: est.final_value_usd } : {}),
+    pnl_source: "estimate",
     ...(minutesHeld !== undefined ? { minutes_held: minutesHeld } : {}),
     close_reason: args.reason,
     ...(amountSol != null ? { amount_sol: amountSol } : {}),

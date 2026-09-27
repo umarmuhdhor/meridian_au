@@ -129,6 +129,14 @@ function RowDetail({ row }: { row: HistoryRow }) {
             </span>
           }
         />
+        <DetailItem
+          label="PnL source"
+          value={
+            perf.pnl_source === "meteora_closed"
+              ? "Meteora (settled)"
+              : "Estimate at close"
+          }
+        />
         <DetailItem label="Mcap in" value={compact(perf.entry_mcap)} />
         <DetailItem label="Mcap out" value={compact(perf.exit_mcap)} />
         <DetailItem

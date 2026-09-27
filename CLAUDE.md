@@ -355,6 +355,13 @@ The scheduler skips overlapping ticks per label (the `_busy` guard is built in).
    direct chain call; see § PnL poller). Without this,
    `buildStateSummary` reports stale open counts (e.g. dashboard summary showed
    36 records vs 0 on-chain before the fix).
+   Then **`finalizeClosedPerformance`** (`management/finalize-performance.ts`, 2026-09-27):
+   the close hook records a PnL *estimate* (`pnl_source:"estimate"`); this pass swaps it
+   for Meteora datapi's settled `status=closed` totals (deposit / withdrawal / all fees —
+   the numbers Meteora's UI shows) and stamps `pnl_source:"meteora_closed"`. Newest first,
+   ≤10 per tick, 14-day lookback (also backfills older records), never throws.
+   Record semantics: `pnl_usd` = exit − entry (fees EXCLUDED), `fees_earned_usd` = claimed
+   + unclaimed, net = `pnl_usd + fees_earned_usd`, `pnl_pct` = net ÷ entry.
 4. **OHLCV enrichment** (`enrichPositionTechnicals`, 2026-08-29, fail-open like
    screening's) — fetch 15m+1h per open position so the regime engine has structure.
 5. `planForPosition` per position: `smartExitEnabled=false` → legacy path (static
@@ -612,7 +619,7 @@ retry-on-failure, and a hand-edited config then drains identically.
 |---|---|---|
 | `state.json` | position-repo | tracked positions (+`entry_technicals` since 2026-08-10, +`last_sage_exit_escalation_at` since 2026-08-29) + recent-events ring (capped 20) |
 | `pool-memory.json` | pool-memory-repo | per-pool deploy history, win rates, cooldowns |
-| `lessons.json` | lesson-repo | lessons + performance records (PerformanceRecord now carries `base_mint`, `entry_technicals`, `exit_technicals`) |
+| `lessons.json` | lesson-repo | lessons + performance records (PerformanceRecord now carries `base_mint`, `entry_technicals`, `exit_technicals`, `pnl_source`) |
 | `decision-log.json` | decision-log | rolling 100 decisions (deploy/close/skip/no_deploy/note) |
 | `strategy-library.json` | strategy-repo | saved strategies + active pointer |
 | `smart-wallets.json` | smart-wallet-repo | tracked KOL/alpha wallets (type lp\|holder) |

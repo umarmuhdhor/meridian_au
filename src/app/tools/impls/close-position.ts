@@ -29,7 +29,8 @@ export const closePositionTool = defineTool({
     // enrichment and let the raw result flow through.
     let snapshot;
     try {
-      const snap = await ctx.chain.getMyPositions();
+      // force: the cached snapshot can be minutes old, and it is the PnL we record.
+      const snap = await ctx.chain.getMyPositions({ force: true });
       snapshot = snap.positions.find((p) => p.position === position_address);
     } catch {
       snapshot = undefined;

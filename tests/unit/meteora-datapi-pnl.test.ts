@@ -172,6 +172,16 @@ describe("createMeteoraDatapiPnlFetcher", () => {
     expect(map.size).toBe(0);
   });
 
+  it("queries status=open by default and status=closed via .closed", async () => {
+    const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ positions: [fixtureRow()] }));
+    const fetcher = createMeteoraDatapiPnlFetcher({ logger: nullLogger, fetchImpl });
+    await fetcher(POOL, WALLET);
+    const closed = await fetcher.closed!(POOL, WALLET);
+    expect(fetchImpl.mock.calls[0]?.[0]).toContain("status=open");
+    expect(fetchImpl.mock.calls[1]?.[0]).toContain("status=closed");
+    expect(closed.get("Pos1111111111111111111111111111111111111111")?.feesUsd).toBe(12.34);
+  });
+
   it("handles `data` array shape as well as `positions`", async () => {
     const fetchImpl = vi.fn<FetchImpl>(async () => jsonResponse({ data: [fixtureRow()] }));
     const fetcher = createMeteoraDatapiPnlFetcher({ logger: nullLogger, fetchImpl });

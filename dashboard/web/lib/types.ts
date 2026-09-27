@@ -130,6 +130,8 @@ export interface PerformanceEntry {
   pnl_pct?: number;
   pnl_usd?: number;
   fees_earned_usd?: number;
+  /** `meteora_closed` = Meteora's settled totals; `estimate` / absent = close-time snapshot. */
+  pnl_source?: "estimate" | "meteora_closed";
   range_efficiency?: number;
   minutes_held?: number;
   close_reason?: string;

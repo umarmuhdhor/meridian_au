@@ -125,6 +125,12 @@ export function memLessonRepo(): LessonRepo {
     async appendPerformance(p) {
       performance.push(p);
     },
+    async updatePerformance(position, patch) {
+      const idx = performance.findLastIndex((p) => p.position === position);
+      if (idx < 0) return false;
+      performance[idx] = { ...performance[idx]!, ...patch };
+      return true;
+    },
     async recentPerformance(limit = 50) {
       return performance.slice(-limit);
     },

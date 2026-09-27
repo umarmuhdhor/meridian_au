@@ -6,6 +6,7 @@ import type { SolanaConnection, WalletKeypair } from "../../../ports/solana.js";
 import type {
   ActiveBin,
   ClaimResult,
+  ClosedPositionPnl,
   CloseResult,
   DeployArgs,
   DeployResult,
@@ -348,6 +349,11 @@ export function createMeteoraChainClient(opts: MeteoraChainClientOptions): Chain
               ? roundNum(datapi.balancesUsd, 4)
               : null
           : null;
+        const claimedFeesUsd = datapi
+          ? solMode && solUsd != null
+            ? roundNum(datapi.feesSol * solUsd, 4)
+            : roundNum(datapi.feesUsd, 4)
+          : null;
         positionToPool.set(rp.addr, poolPk);
         positions.push({
           position: rp.addr,
@@ -366,6 +372,7 @@ export function createMeteoraChainClient(opts: MeteoraChainClientOptions): Chain
           age_minutes: null,
           deposit_sol: datapi?.depositSol ?? null,
           deposit_usd: datapi?.depositUsd ?? null,
+          claimed_fees_usd: claimedFeesUsd,
         });
       }
     }
@@ -498,6 +505,22 @@ export function createMeteoraChainClient(opts: MeteoraChainClientOptions): Chain
         positionAddress,
         reason,
       );
+    },
+
+    async getClosedPositionPnl(
+      poolAddress: string,
+      positionAddress: string,
+    ): Promise<ClosedPositionPnl | null> {
+      const fetchClosed = opts.pnl?.closed;
+      if (!fetchClosed) return null;
+      const rec = (await fetchClosed(poolAddress, wallet.address)).get(positionAddress);
+      if (!rec || rec.depositUsd == null) return null;
+      return {
+        position: positionAddress,
+        deposits_usd: rec.depositUsd,
+        withdrawals_usd: rec.withdrawalsUsd,
+        fees_usd: rec.feesUsd,
+      };
     },
 
     async claimFees(positionAddress: string): Promise<ClaimResult> {

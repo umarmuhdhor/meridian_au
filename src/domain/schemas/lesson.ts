@@ -27,6 +27,12 @@ export const PerformanceRecordSchema = z
     fees_earned_usd: z.number().nonnegative().optional(),
     initial_value_usd: z.number().optional(),
     final_value_usd: z.number().optional(),
+    /**
+     * Where the PnL figures came from. `estimate` = last open-position snapshot at close
+     * time; `meteora_closed` = Meteora datapi's settled closed-position totals (matches
+     * Meteora's own UI). Absent on records written before 2026-09-27 — read as estimate.
+     */
+    pnl_source: z.enum(["estimate", "meteora_closed"]).optional(),
     range_efficiency: z.number().optional(),
     minutes_held: z.number().int().nonnegative().optional(),
     minutes_in_range: z.number().int().nonnegative().optional(),

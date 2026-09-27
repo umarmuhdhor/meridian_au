@@ -17,5 +17,11 @@ export interface LessonRepo {
   pinLesson(id: string): Promise<boolean>;
   unpinLesson(id: string): Promise<boolean>;
   appendPerformance(perf: PerformanceRecord): Promise<void>;
+  /**
+   * Merge `patch` into the performance record for `position` (the latest one, should a
+   * position appear twice). Resolves false when no record matches or the file cannot be
+   * read — it never rewrites a file it failed to parse.
+   */
+  updatePerformance(position: string, patch: Partial<PerformanceRecord>): Promise<boolean>;
   recentPerformance(limit?: number): Promise<PerformanceRecord[]>;
 }

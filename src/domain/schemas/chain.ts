@@ -34,6 +34,11 @@ export const OnChainPositionSchema = z.object({
    *  / `amount_sol` for externally-opened / pre-hook positions during reconcile. */
   deposit_sol: z.number().nullable().optional(),
   deposit_usd: z.number().nullable().optional(),
+  /** Fees already claimed out of this position (datapi `allTimeFees`), USD. Distinct
+   *  from `unclaimed_fees_usd`: a position's lifetime fee take is the SUM of the two,
+   *  and a close that only reads the unclaimed half under-reports every position the
+   *  management cycle claimed from along the way. */
+  claimed_fees_usd: z.number().nullable().optional(),
 });
 export type OnChainPosition = z.infer<typeof OnChainPositionSchema>;
 
@@ -124,8 +129,23 @@ export const CloseResultSchema = z.object({
   amount_sol_initial: z.number().nullable().optional(),
   age_minutes: z.number().int().nonnegative().nullable().optional(),
   peak_pnl_pct: z.number().nullable().optional(),
+  /** Deposited value per Meteora datapi, from the pre-close snapshot. */
+  initial_value_usd: z.number().nullable().optional(),
 });
 export type CloseResult = z.infer<typeof CloseResultSchema>;
+
+/**
+ * Settled totals for a CLOSED position, per Meteora datapi (`status=closed`) — the same
+ * numbers Meteora's "All Closed Position" view shows. All USD. Net PnL is
+ * `withdrawals_usd + fees_usd - deposits_usd`.
+ */
+export const ClosedPositionPnlSchema = z.object({
+  position: z.string(),
+  deposits_usd: z.number(),
+  withdrawals_usd: z.number(),
+  fees_usd: z.number().nonnegative(),
+});
+export type ClosedPositionPnl = z.infer<typeof ClosedPositionPnlSchema>;
 
 /** Wallet SOL balance + USD. */
 export const WalletBalanceSchema = z.object({

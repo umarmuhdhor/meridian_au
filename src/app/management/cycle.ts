@@ -11,6 +11,7 @@ import type { KlineTimeframe, TechnicalsSummary } from "../../domain/schemas/kli
 import { computeTechnicals, formatTechnicalsLine } from "../../domain/format/technicals.js";
 import type { SageExitAdvisor } from "../../ports/sage-exit-advisor.js";
 import { partitionMirrorOwnership } from "../../domain/rules/follow-diff.js";
+import { finalizeClosedPerformance } from "./finalize-performance.js";
 
 const EXIT_ADVISOR_PROMPT = [
   "You are Meridian's DLMM position EXIT advisor. Given ONE open position's live",
@@ -292,6 +293,15 @@ export async function runManagementCycle(deps: ManagementCycleDeps): Promise<Man
     });
     ctx.logger.info("management", `reconciled ghost-open position ${t.position.slice(0, 8)}… as closed`);
   }
+
+  // Swap close-time PnL estimates for Meteora's settled totals. Before the
+  // empty-snapshot return: the tick right after the last close is exactly when there
+  // is something to settle and nothing left open.
+  await finalizeClosedPerformance(ctx).catch((err) =>
+    ctx.logger.warn("management", "finalizeClosedPerformance failed", {
+      error: err instanceof Error ? err.message : String(err),
+    }),
+  );
 
   if (snap.total_positions === 0) {
     ctx.logger.info("management", "no positions — nothing to do");

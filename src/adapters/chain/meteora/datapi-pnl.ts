@@ -85,10 +85,17 @@ export interface DatapiPnlRecord {
   feesSol: number;
 }
 
-export type MeteoraDatapiPnlFetcher = (
+type DatapiPnlFetch = (
   poolAddress: string,
   walletAddress: string,
 ) => Promise<Map<string, DatapiPnlRecord>>;
+
+/**
+ * Fetches the wallet's OPEN positions in a pool. `closed`, when present, fetches the
+ * CLOSED ones instead — the settled deposit / withdrawal / fee totals Meteora's own
+ * "All Closed Position" view renders. Optional so plain test doubles stay valid.
+ */
+export type MeteoraDatapiPnlFetcher = DatapiPnlFetch & { closed?: DatapiPnlFetch };
 
 export interface MeteoraDatapiPnlOptions {
   logger: Logger;
@@ -158,13 +165,14 @@ export function createMeteoraDatapiPnlFetcher(opts: MeteoraDatapiPnlOptions): Me
   const baseUrl = (opts.baseUrl ?? DEFAULT_METEORA_DATAPI_BASE_URL).replace(/\/+$/, "");
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  return async function fetchPnl(
+  async function fetchByStatus(
     poolAddress: string,
     walletAddress: string,
+    status: "open" | "closed",
   ): Promise<Map<string, DatapiPnlRecord>> {
     const url =
       `${baseUrl}/${poolAddress}/pnl?user=${walletAddress}` +
-      `&status=open&pageSize=100&page=1`;
+      `&status=${status}&pageSize=100&page=1`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -193,5 +201,10 @@ export function createMeteoraDatapiPnlFetcher(opts: MeteoraDatapiPnlOptions): Me
     } finally {
       clearTimeout(timer);
     }
-  };
+  }
+
+  const fetcher: MeteoraDatapiPnlFetcher = (poolAddress, walletAddress) =>
+    fetchByStatus(poolAddress, walletAddress, "open");
+  fetcher.closed = (poolAddress, walletAddress) => fetchByStatus(poolAddress, walletAddress, "closed");
+  return fetcher;
 }

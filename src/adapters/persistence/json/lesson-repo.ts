@@ -88,6 +88,17 @@ export function createJsonLessonRepo(opts: JsonLessonRepoOptions): LessonRepo {
       await writeJsonAtomic(filePath, file);
     },
 
+    async updatePerformance(position: string, patch: Partial<PerformanceRecord>): Promise<boolean> {
+      const r = await loadOrEmpty();
+      if (!r.ok) return false;
+      const file = r.value;
+      const idx = file.performance.findLastIndex((p) => p.position === position);
+      if (idx < 0) return false;
+      file.performance[idx] = { ...file.performance[idx]!, ...patch };
+      await writeJsonAtomic(filePath, file);
+      return true;
+    },
+
     async recentPerformance(limit = 50): Promise<PerformanceRecord[]> {
       const r = await loadOrEmpty();
       if (!r.ok) return [];

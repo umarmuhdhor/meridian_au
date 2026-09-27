@@ -4,7 +4,7 @@ description: Operate the Meridian DLMM trading agent — screen pools and decide
 argument-hint: "(no args — this is a knowledge skill; invoke it, then call the mrd_* tools per the guide below)"
 metadata:
   toolset: meridian
-  primary-source: /home/nafidinara/.hermes/profiles/sage/plugins/meridian/
+  primary-source: ~/.hermes/profiles/sage/plugins/meridian/
 ---
 
 # Meridian trading operations

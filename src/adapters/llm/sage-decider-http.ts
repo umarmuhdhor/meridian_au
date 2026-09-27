@@ -23,7 +23,7 @@ export type FetchLike = (
 ) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown>; text: () => Promise<string> }>;
 
 export interface SageDeciderHttpOptions {
-  /** Base URL of the Hermes api server, e.g. https://sage-api.nafidinara.com (no trailing /v1). */
+  /** Base URL of the Hermes api server, e.g. http://127.0.0.1:8642 (no trailing /v1). */
   baseUrl: string;
   /** API_SERVER_KEY for the Hermes api server. */
   apiKey: string;

@@ -730,7 +730,7 @@ async function main(): Promise<void> {
       .split(",")
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
-    // MERIDIAN_TELEGRAM_INBOUND=false → Calisto is a STATIC notify-only bot: it still
+    // MERIDIAN_TELEGRAM_INBOUND=false → Meridian is a STATIC notify-only bot: it still
     // posts deploy/close cards (the outbound notifier is separate) but never replies to
     // messages / runs the GENERAL LLM. Use this when Sage is the sole conversational brain
     // in the group. Default (unset) keeps the inbound REPL for backward compatibility.
@@ -765,7 +765,7 @@ async function main(): Promise<void> {
       shutdownInbound = handle.stop;
       console.log("  telegram-inbound: long-poll REPL armed");
     } else if (telegramToken && telegramChatId && !inboundEnabled) {
-      console.log("  telegram-inbound: disabled (MERIDIAN_TELEGRAM_INBOUND=false — Calisto is notify-only; Sage is the brain)");
+      console.log("  telegram-inbound: disabled (MERIDIAN_TELEGRAM_INBOUND=false — Meridian is notify-only; Sage is the brain)");
     } else {
       console.log("  telegram-inbound: disabled (no TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)");
     }

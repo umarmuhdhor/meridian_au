@@ -4,7 +4,6 @@ Runbook untuk menjalankan Meridian (daemon + dashboard Next.js) di satu PC
 Windows sebagai homeserver, diekspos ke internet lewat `cloudflared` **tanpa
 membuka port apa pun di router** (tunnel outbound-only).
 
-Berbeda dari `deploy/OPERATIONS.md` (vivobook, Docker, `calisto.nafidinara.com`).
 Setup ini **native Node + pm2**, tanpa Docker, tanpa Caddy.
 
 ```
@@ -91,7 +90,7 @@ pm2 save
 pm2 status
 ```
 
-> Bukan `ecosystem.config.cjs` di root — itu punya image Docker (vivobook),
+> Bukan `ecosystem.config.cjs` di root — itu peninggalan image Docker lama,
 > Next-nya listen di semua interface. Yang benar untuk homeserver ini adalah
 > `ecosystem.homeserver.config.cjs`, yang mengikat Next ke `127.0.0.1` saja.
 
@@ -254,9 +253,8 @@ const sageEnabled = process.env.MERIDIAN_DECIDER !== "loop"
 Sage baru aktif kalau `SAGE_BASE_URL` **dan** `SAGE_API_KEY` dua-duanya terisi.
 Di homeserver ini keduanya kosong, jadi daemon otomatis memakai ReAct loop lokal
 lewat `OPENROUTER_API_KEY` — tidak perlu setting apa pun. **Jangan** menambahkan
-variabel `SAGE_*` dan jangan set `MERIDIAN_DECIDER`; `docker-compose.yml` memang
-memasang `MERIDIAN_DECIDER=sage`, tapi itu khusus vivobook yang memang
-menjalankan Hermes/Sage di host yang sama.
+variabel `SAGE_*` dan jangan set `MERIDIAN_DECIDER=sage` — itu hanya berguna kalau Hermes/Sage
+benar-benar berjalan dan bisa dijangkau.
 
 Jadi satu-satunya kunci LLM yang dibutuhkan di sini adalah OpenRouter.
 `RPC_URL` dan `WALLET_PRIVATE_KEY` bukan LLM — itu untuk membaca chain dan

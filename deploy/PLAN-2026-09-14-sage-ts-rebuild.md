@@ -1,7 +1,7 @@
 # PLAN — Membangun ulang Sage sebagai service TypeScript (`sage-ts`)
 
 > **Status:** rancangan, belum dikerjakan. Dibuat 2026-09-14.
-> **Konteks:** Hermes/Sage lama hidup di vivobook dan tidak lagi tersedia. Homeserver
+> **Konteks:** Hermes/Sage lama tidak lagi tersedia. Homeserver
 > Windows sekarang tidak punya Docker maupun Python. Meridian sementara berjalan
 > dengan ReAct loop lokal (`SAGE_*` kosong → `sageEnabled=false`).
 
@@ -73,7 +73,7 @@ Bridge sudah siap: seluruh tool yang Sage butuhkan **sudah ter-allowlist**
 ([`allowlist.ts`](../src/adapters/dashboard/allowlist.ts)), lengkap dengan gerbang
 `confirm:true`, idempotensi `cycle_id`, dan human-gate `update_config`.
 
-**Tidak perlu sidecar socat.** Itu khusus netns Docker di vivobook; di Windows
+**Tidak perlu sidecar socat.** Itu khusus netns Docker; di Windows
 native kedua proses berbagi loopback yang sama.
 
 ---
@@ -111,7 +111,7 @@ sage-data/                     ← STATE_DIR terpisah dari Meridian
 
 `SKILL.md` + `references/` **sudah ada di repo** — pengetahuan operasional Sage
 (deteksi mode, inventaris tool, playbook, veto spike-top, matriks strategi) tidak
-hilang, hanya versinya tertinggal dari yang terakhir hidup di vivobook.
+hilang, hanya versinya tertinggal dari salinan live terakhir di host Sage lama.
 
 Self-edit (Sage menyunting SKILL.md-nya sendiri) diberi gerbang: hanya di mode human
 operator, hanya setelah konfirmasi eksplisit, dan setiap tulisan membuat `.bak`.

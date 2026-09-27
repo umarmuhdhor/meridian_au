@@ -1,7 +1,7 @@
 // pm2 ecosystem untuk homeserver Windows (native Node, tanpa Docker).
 //
 // Beda dari ecosystem.config.cjs di root — JANGAN gabungkan keduanya:
-//   root : dipakai image Docker produksi (vivobook). Di sana meridian-web WAJIB
+//   root : dipakai image Docker lama. Di sana meridian-web WAJIB
 //          listen di semua interface, karena Caddy menjangkaunya lewat DNS
 //          container `meridian:3000` (bukan loopback).
 //   ini  : satu PC, satu-satunya klien web adalah cloudflared di mesin yang sama,

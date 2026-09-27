@@ -60,9 +60,9 @@ rollback (`git checkout legacy-js`).
   trend, swing-low support proximity + touch count, consecutive red-candle streak).
   Screening pre-fetches these inline per candidate; the tool is exposed for
   interactive analysis and post-mortems in the Sage Telegram group.
-- **Telegram REPL** — in production, screening + conversational control is
-  delegated to **Sage** (Hermes agent, memory-backed) via the intra-host bridge
-  (see `deploy/SAGE-MERIDIAN-ROLLOUT.md`). Meridian keeps outbound cards
+- **Telegram REPL** — with `MERIDIAN_DECIDER=sage`, screening + conversational
+  control is delegated to **Sage** (Hermes agent, memory-backed) via the dashboard
+  bridge. Meridian keeps outbound cards
   (deploy/close/OOR alerts, daily briefings) posted from the same @SageHermesAnd_bot
   identity; Sage handles all inbound. Standalone Meridian mode still supports its
   own inbound long-poll REPL when `MERIDIAN_TELEGRAM_INBOUND` is unset.
@@ -200,7 +200,7 @@ See `dashboard/PRD.md`, `dashboard/Design.md`, and `dashboard/plan/` for the ful
 
 ---
 
-## Production deployment
+## Running
 
 Meridian runs live on a **Windows homeserver** as two **pm2** processes — the
 `meridian` trading daemon and the `meridian-web` Next.js dashboard. Native Node:
@@ -215,11 +215,6 @@ Deploys are manual: `git pull`, build, `pm2 restart`.
 [`deploy/homeserver/README.md`](deploy/homeserver/README.md)** — tunnel setup,
 pm2 autostart, secrets, PIN auth, and troubleshooting. Start there for anything
 deploy-related.
-
-> **Historical.** Meridian previously ran as Docker containers on the vivobook
-> box at `calisto.nafidinara.com`, auto-deployed from the `dashboard` branch via
-> GitHub Actions. That setup is **retired**; `deploy/OPERATIONS.md` and
-> `deploy/MIGRATION-vivobook-runbook.md` are kept for history only.
 
 ---
 

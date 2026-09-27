@@ -23,13 +23,14 @@ Autonomous DLMM liquidity provider agent for Meteora pools on Solana.
    (`cloudflared` Windows service) at **`au.alieffauzan.com`**, gated by a 6-digit
    PIN (and optionally Cloudflare Access at the edge). Deploys are manual
    (`git pull` + build + `pm2 restart`) — there is no CI deploy pipeline.
+   `MERIDIAN_STATE_DIR` = the repo root, so `lessons.json`, `state.json` etc. in
+   the repo ARE the live state. The pm2 daemon runs **elevated (Administrator)** —
+   a non-admin shell gets `connect EPERM \\.\pipe\rpc.sock` from `pm2 ls/restart`,
+   and each such attempt spawns a stray pm2 daemon. Restart from an admin terminal:
+   `pm2 restart meridian`.
    **All deploy/ops details live in
    [`deploy/homeserver/README.md`](deploy/homeserver/README.md)** — this file is
    code internals only.
-   > **Historical:** the earlier vivobook / Docker / `calisto.nafidinara.com` setup
-   > is described in [`deploy/OPERATIONS.md`](deploy/OPERATIONS.md) and
-   > [`deploy/MIGRATION-vivobook-runbook.md`](deploy/MIGRATION-vivobook-runbook.md).
-   > Those are **superseded** — read them for history, not for how the box runs today.
 
 ---
 
@@ -340,8 +341,8 @@ The scheduler skips overlapping ticks per label (the `_busy` guard is built in).
      (robust to a concurrent close), not the text. A `cycle_id` is passed for
      idempotency. On transport error/timeout → **fall back to the local loop** (same
      `cycle_id`); skipped if a deploy already landed (no double-deploy). A clean Sage
-     "no-deploy" is NOT a failure — never falls back on it. Full ops:
-     [`deploy/SAGE-MERIDIAN-ROLLOUT.md`](deploy/SAGE-MERIDIAN-ROLLOUT.md).
+     "no-deploy" is NOT a failure — never falls back on it. Sage-side setup:
+     [`deploy/hermes-meridian-plugin/README.md`](deploy/hermes-meridian-plugin/README.md).
 
 ### Management cycle (fully deterministic — no LLM)
 1. `getMyPositions({force:true})`.
@@ -621,10 +622,10 @@ retry-on-failure, and a hand-edited config then drains identically.
 | `user-config.json` | config-repo | the live config (loaded → nested `AppConfig`) |
 
 All writes are temp-file + fsync + atomic rename **except `user-config.json`**, which is
-written with `writeJsonAtomic(..., {inPlace:true})` — under Docker it was a single-file
-bind mount whose rename detaches the inode (see § Known issues); the in-place write is
-kept because it is strictly safer. Config redaction (`*key/token/secret*`) happens when a
-file is served over the bridge. On the current homeserver both the state files and
+written with `writeJsonAtomic(..., {inPlace:true})` — overwriting in place keeps it safe
+if it is ever a single-file Docker bind mount, where rename detaches the inode (see
+§ Known issues). Config redaction (`*key/token/secret*`) is currently disabled (identity
+passthrough in `redact.ts`). On the current homeserver both the state files and
 `user-config.json` are plain files on the repo root — see
 `deploy/homeserver/README.md`.
 
@@ -676,17 +677,17 @@ file is served over the bridge. On the current homeserver both the state files a
 | `MERIDIAN_STATE_DIR` | where JSON state lives (default cwd). |
 | `MERIDIAN_DEMO` | `true` forces the fake LLM. |
 | `DASHBOARD_ENABLED` / `DASHBOARD_PORT` / `DASHBOARD_TOKEN` | bridge on/off, port (8787), Bearer token. |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` / `TELEGRAM_ALLOWED_USER_IDS` | ops surface + auth. In production (since 2026-08-02) `TELEGRAM_BOT_TOKEN` is Sage's bot token — Meridian and Hermes share the same bot identity (@SageHermesAnd_bot); Meridian only writes, Hermes handles inbound. |
-| `MERIDIAN_TELEGRAM_INBOUND` | **must be `false` in production** — two processes polling the shared token = `getUpdates` 409. Set as compose default. |
-| **`MERIDIAN_DECIDER`** | `sage` → screening delegates the deploy decision to Sage (Path 2); anything else / unset = local LLM loop. **Compose default is `sage` since 2026-08-02.** |
-| `SAGE_BASE_URL` / `SAGE_API_KEY` / `SAGE_SESSION_KEY` / `SAGE_TIMEOUT_MS` | Sage endpoint (Hermes api), memory-scope header, delegation timeout (default 90s). Only read when `MERIDIAN_DECIDER=sage`. **Unset on the current homeserver → Sage is disabled and screening uses the local ReAct loop.** (Vivobook-era value was the intra-host `http://host.docker.internal:8643`.) |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` / `TELEGRAM_ALLOWED_USER_IDS` | ops surface + auth. When sharing a bot token with Sage (Hermes), Meridian only writes and Hermes handles inbound. |
+| `MERIDIAN_TELEGRAM_INBOUND` | **must be `false` when the bot token is shared with Hermes** — two processes polling one token = `getUpdates` 409. |
+| **`MERIDIAN_DECIDER`** | `sage` → screening delegates the deploy decision to Sage (Path 2); anything else / unset = local LLM loop. |
+| `SAGE_BASE_URL` / `SAGE_API_KEY` / `SAGE_SESSION_KEY` / `SAGE_TIMEOUT_MS` | Sage endpoint (Hermes api), memory-scope header, delegation timeout (default 90s). Only read when `MERIDIAN_DECIDER=sage`. **Unset on the current homeserver → Sage is disabled and screening uses the local ReAct loop.** |
 | `SAGE_EXIT_TIMEOUT_MS` | `SageExitAdvisor` request timeout (default 30000). The exit advisor reuses `SAGE_BASE_URL`/`SAGE_API_KEY`/`SAGE_SESSION_KEY`; the advisor is created whenever those are set, but only consulted when `sageExitEnabled=true`. |
-| `SAGE_CF_ACCESS_CLIENT_ID` / `SAGE_CF_ACCESS_CLIENT_SECRET` | **Historical** — CF Access service-token headers used when Sage was fronted by Cloudflare Access (pre-2026-08-01 Tencent era). Intra-host path drops them; the code still reads them if set. |
+| `SAGE_CF_ACCESS_CLIENT_ID` / `SAGE_CF_ACCESS_CLIENT_SECRET` | CF Access service-token headers, only needed if Sage sits behind Cloudflare Access; sent when set. |
 | `SOL_PRICE_USD` | static-price fallback (default 150). |
 | `DRY_RUN` | **surfaced only as a HiveMind capability flag — NOT a gating var in the TS code.** |
 
 > The old JS-era `DRY_RUN`-as-master-switch is gone. The gates are `MERIDIAN_CHAIN`
-> + `MERIDIAN_WRITE_UNSAFE`. Production sets these in `docker-compose.yml`, not `.env`.
+> + `MERIDIAN_WRITE_UNSAFE`, set in `.env`.
 
 ---
 
@@ -727,13 +728,10 @@ cron control `/pause /resume /stop` (need `scheduler`/`shutdown` deps); write co
 text → GENERAL agent tick (`GENERAL_TOOLS`, `maxSteps:8`). **Auth (chat-id / user
 allowlist) is upstream** (the inbound adapter), not in the router.
 
-**Notify-only mode (production default)**: with `MERIDIAN_TELEGRAM_INBOUND=false` the
-daemon never starts the inbound REPL — only posts outbound deploy/close cards. Since
-2026-08-02 the token itself is Sage's (@SageHermesAnd_bot), so those cards appear from
-the same bot that replies to you conversationally. Hermes is the sole `getUpdates` poller
-on the shared token — flipping inbound back on would cause a 409 Conflict. Calisto bot
-retired; env backups on the host at `~/meridian/.env.bak-sagebot-*`. See
-[`deploy/SAGE-MERIDIAN-ROLLOUT.md`](deploy/SAGE-MERIDIAN-ROLLOUT.md).
+**Notify-only mode**: with `MERIDIAN_TELEGRAM_INBOUND=false` the daemon never starts
+the inbound REPL — only posts outbound deploy/close cards. Use it when the bot token is
+shared with Sage (Hermes): Hermes must be the sole `getUpdates` poller on a shared token,
+or both get a 409 Conflict.
 
 ---
 
@@ -746,11 +744,9 @@ retired; env backups on the host at `~/meridian/.env.bak-sagebot-*`. See
   returns OUR positions, not X's. Reading a foreign wallet goes through the
   `WalletWatcher` port (`adapters/market/meteora-wallet-watcher.ts`) instead — that is
   why follow-the-wallet does not reuse `getMyPositions`.
-- **Config path vs web read-path divergence**: the daemon loads config from cwd
-  (`/app/user-config.json`), but the web container reads `MERIDIAN_ROOT=/opt/data`.
-  `docker-compose.yml` bind-mounts the same host config file into the web container
-  at `/opt/data/user-config.json` (ro) so the Config page isn't blank — keep that
-  mount in sync if either path moves.
+- **Config path vs web read-path divergence**: the daemon loads config from cwd, but
+  the web app reads files from `MERIDIAN_ROOT`. Both must point at the same
+  `user-config.json` or the dashboard Config page is blank/stale.
 - **Provider fallback / system-role / tool-choice retry are decorators, not wired by
   default** — `daemon.ts` uses `createOpenRouterLLMClient` directly. Wrap it if you need resilience.
 - **`role` is label-only**; the `activeRegistry` ternary in the loop is a dead no-op —
@@ -831,9 +827,9 @@ retired; env backups on the host at `~/meridian/.env.bak-sagebot-*`. See
   design in [`deploy/SPEC-2026-08-29-smart-exit-regime-engine.md`](deploy/SPEC-2026-08-29-smart-exit-regime-engine.md).
 - Change what Sage knows (screening OR exit-advisor prompts/behavior) →
   `deploy/hermes-meridian-plugin/skill/SKILL.md` — **only relevant when Sage is wired
-  up; it is disabled on the current homeserver** (**pull the live copy from vivobook
-  FIRST — Sage self-edits it**; deploy steps in that plugin's README) + Sage's SOUL.md on
-  the box. The per-request exit prompt Meridian sends is `EXIT_ADVISOR_PROMPT` in
+  up; it is disabled on the current homeserver** (**pull the live copy from the Sage
+  host FIRST — Sage self-edits it**; deploy steps in that plugin's README) + Sage's
+  SOUL.md on that host. The per-request exit prompt Meridian sends is `EXIT_ADVISOR_PROMPT` in
   `src/app/management/cycle.ts`.
 - Change follow-the-wallet → `src/domain/rules/follow-diff.ts` (pure diff/sizing/range) +
   `src/app/follow/cycle.ts` + `src/app/follow/learn.ts` +
@@ -844,5 +840,4 @@ retired; env backups on the host at `~/meridian/.env.bak-sagebot-*`. See
 - Config schema → `src/domain/schemas/config*.ts` + `config-load.ts`.
 - Dashboard/bridge → `src/adapters/dashboard/` + `dashboard/web/`.
 - **Deployment / ops / secrets / troubleshooting →
-  [`deploy/homeserver/README.md`](deploy/homeserver/README.md)** (the vivobook-era
-  `deploy/OPERATIONS.md` is historical).
+  [`deploy/homeserver/README.md`](deploy/homeserver/README.md)**.

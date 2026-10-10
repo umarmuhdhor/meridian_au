@@ -3,6 +3,7 @@ import { StatusBadge } from "./StatusBadge";
 import { pnlColorClass } from "@/lib/pnl-color";
 import { formatPnlPct, formatPnlUsd, formatUsd, formatDuration, binRange } from "@/lib/format";
 import { meteoraPoolUrl } from "@/lib/meteora";
+import { openPositionPnl } from "@/lib/position-pnl";
 import type { Position } from "@/lib/types";
 import { cn } from "@/lib/cn";
 
@@ -18,6 +19,8 @@ function statusOf(p: Position): { status: "in_range" | "out_of_range"; detail?: 
 export function PositionCard({ p, actions }: { p: Position; actions?: React.ReactNode }) {
   const { status, detail } = statusOf(p);
   const name = p.pool_name || p.pair || "Position";
+  // Net of fees, matching Meteora and the pnl_pct shown above it.
+  const { netUsd: net, feesUsd } = openPositionPnl(p);
 
   return (
     <div className="flex flex-col gap-3 rounded-[var(--radius-lg)] border border-border bg-surface-1 p-4">
@@ -48,7 +51,7 @@ export function PositionCard({ p, actions }: { p: Position; actions?: React.Reac
             {formatPnlPct(p.pnl_pct)}
           </div>
           <div className="text-[12px] text-text-secondary tnum">
-            <span className={pnlColorClass(p.pnl_usd)}>{formatPnlUsd(p.pnl_usd)}</span>
+            <span className={pnlColorClass(net)}>{formatPnlUsd(net)}</span>
             {p.peak_pnl_pct != null && (
               <span className="ml-2 text-text-tertiary">peak {formatPnlPct(p.peak_pnl_pct)}</span>
             )}
@@ -56,7 +59,7 @@ export function PositionCard({ p, actions }: { p: Position; actions?: React.Reac
         </div>
         <div className="text-right text-[12px] text-text-tertiary">
           <div className="font-mono tnum">{binRange(p.lower_bin ?? null, p.upper_bin ?? null)}</div>
-          <div className="tnum">fee {formatUsd(p.unclaimed_fees_usd)}</div>
+          <div className="tnum">fee {formatUsd(feesUsd)}</div>
           <div className="tnum">{formatDuration(p.age_minutes)}</div>
         </div>
       </div>

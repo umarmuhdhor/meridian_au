@@ -53,7 +53,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const sealed = await sealData({ authed: true, at: now }, { password: secret, ttl: SESSION_TTL_SEC });
   (await cookies()).set(SESSION_COOKIE, sealed, {
     httpOnly: true,
-    secure: true,
+    // `next dev` serves plain http://localhost, where a Secure cookie is dropped.
+    secure: process.env.NODE_ENV === "production",
     sameSite: "strict",
     path: "/",
     maxAge: SESSION_TTL_SEC,

@@ -45,6 +45,8 @@ export function useLiveEvents(enabled = true) {
                 ...(upd.total_value_true_usd !== undefined ? { total_value_true_usd: upd.total_value_true_usd } : {}),
                 ...(upd.unclaimed_fees_usd !== undefined ? { unclaimed_fees_usd: upd.unclaimed_fees_usd } : {}),
                 ...(upd.collected_fees_usd !== undefined ? { collected_fees_usd: upd.collected_fees_usd } : {}),
+                ...(upd.claimed_fees_usd !== undefined ? { claimed_fees_usd: upd.claimed_fees_usd } : {}),
+                ...(upd.deposit_usd !== undefined ? { deposit_usd: upd.deposit_usd } : {}),
                 ...(upd.active_bin !== undefined ? { active_bin: upd.active_bin } : {}),
                 ...(upd.lower_bin !== undefined ? { lower_bin: upd.lower_bin } : {}),
                 ...(upd.upper_bin !== undefined ? { upper_bin: upd.upper_bin } : {}),

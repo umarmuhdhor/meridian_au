@@ -11,6 +11,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Address } from "@/components/Address";
 import { SkeletonRows, EmptyState, ErrorState } from "@/components/states";
 import { pnlColorClass } from "@/lib/pnl-color";
+import { openPositionPnl } from "@/lib/position-pnl";
 import {
   formatPnlPct,
   formatPnlUsd,
@@ -75,13 +76,7 @@ function OpenPositionDetail({ p }: { p: Position }) {
     ? Math.max(0, Math.round((Date.now() - deployedTs) / 60_000))
     : p.age_minutes ?? null;
 
-  // Prefer server pnl_usd; algebraic fallback for older responses.
-  const derivedPnlUsd =
-    p.pnl_usd ??
-    (p.total_value_usd != null && p.pnl_pct != null && 100 + p.pnl_pct !== 0
-      ? (p.total_value_usd * p.pnl_pct) / (100 + p.pnl_pct)
-      : null);
-  const netUsd = (derivedPnlUsd ?? 0) + (p.unclaimed_fees_usd ?? 0);
+  const { pnlUsd: derivedPnlUsd, feesUsd, netUsd } = openPositionPnl(p);
 
   return (
     <div className="flex flex-col gap-3 border-t border-border bg-surface-1 px-4 py-3">
@@ -102,15 +97,15 @@ function OpenPositionDetail({ p }: { p: Position }) {
           }
         />
         <DetailItem label="Size" value={formatSol(p.amount_sol_initial ?? null, 2)} />
-        <DetailItem label="Entry value" value={formatUsd(p.initial_value_usd ?? null)} />
+        <DetailItem label="Entry value" value={formatUsd(p.deposit_usd ?? p.initial_value_usd ?? null)} />
         <DetailItem label="Current value" value={formatUsd(p.total_value_usd ?? null)} />
         <DetailItem
           label="PnL $"
           value={<span className={pnlColorClass(derivedPnlUsd)}>{formatPnlUsd(derivedPnlUsd)}</span>}
         />
         <DetailItem
-          label="Fees earned"
-          value={formatUsd(p.unclaimed_fees_usd ?? null)}
+          label="Fees earned (claimed + unclaimed)"
+          value={formatUsd(feesUsd)}
         />
         <DetailItem
           label="Net PnL (PnL + fees)"
@@ -273,24 +268,22 @@ function OpenPositions() {
                       {p.peak_pnl_pct != null && <div className="text-[11px] text-text-tertiary">peak {formatPnlPct(p.peak_pnl_pct)}</div>}
                     </td>
                     {(() => {
-                      const derivedPnlUsd =
-                        p.pnl_usd ??
-                        (p.total_value_usd != null && p.pnl_pct != null && 100 + p.pnl_pct !== 0
-                          ? (p.total_value_usd * p.pnl_pct) / (100 + p.pnl_pct)
-                          : null);
+                      const { pnlUsd: derivedPnlUsd, feesUsd, netUsd: net } = openPositionPnl(p);
                       const derivedAge =
                         p.age_minutes ??
                         (p.deployed_at
                           ? Math.max(0, Math.round((Date.now() - Date.parse(p.deployed_at)) / 60_000))
                           : null);
-                      const net = (derivedPnlUsd ?? 0) + (p.unclaimed_fees_usd ?? 0);
                       return (
                         <>
                           <td className={`px-3 py-2.5 text-right font-mono tnum ${pnlColorClass(derivedPnlUsd)}`}>
                             {formatPnlUsd(derivedPnlUsd)}
                           </td>
-                          <td className="px-3 py-2.5 text-right font-mono text-text-secondary tnum">
-                            {formatUsd(p.unclaimed_fees_usd)}
+                          <td
+                            className="px-3 py-2.5 text-right font-mono text-text-secondary tnum"
+                            title={`claimed ${formatUsd(p.claimed_fees_usd ?? 0)} + unclaimed ${formatUsd(p.unclaimed_fees_usd ?? 0)}`}
+                          >
+                            {formatUsd(feesUsd)}
                           </td>
                           <td className={`px-3 py-2.5 text-right font-mono tnum ${pnlColorClass(net)}`}>
                             {formatPnlUsd(net)}

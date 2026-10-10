@@ -24,8 +24,9 @@ import type { PerformanceEntry, Decision } from "@/lib/types";
 
 // Closed-position history: lessons.json performance[] joined with the matching
 // decision-log deploy entry (by position address) for the open reason.
-// decision-log only keeps the last 100 decisions, so older closes may have no
-// deploy reason — the row still renders from performance data alone.
+// decision-log is uncapped since 2026-09-29, but closes whose deploy predates that
+// (when it kept only 100 entries) may have no deploy reason — the row still renders
+// from performance data alone.
 
 export interface HistoryRow {
   perf: PerformanceEntry;

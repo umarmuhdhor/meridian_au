@@ -9,6 +9,7 @@ import { DecisionTimeline } from "@/components/DecisionTimeline";
 import { SkeletonCards, SkeletonRows, EmptyState, ErrorState } from "@/components/states";
 import { pnlColorClass } from "@/lib/pnl-color";
 import { formatPnlUsd, formatPnlPct, formatSol, formatPct } from "@/lib/format";
+import { openPositionPnl } from "@/lib/position-pnl";
 import type { LessonsFile, DecisionLogFile, Position } from "@/lib/types";
 
 function winRate(perf: LessonsFile["performance"]): { rate: number | null; n: number } {
@@ -26,7 +27,7 @@ export default function OverviewPage() {
 
   const positions: Position[] = positionsQ.data?.positions ?? [];
   const sol = summaryQ.data?.balance?.sol;
-  const netUsd = positions.reduce((s, p) => s + (p.pnl_usd ?? 0), 0);
+  const netUsd = positions.reduce((s, p) => s + (openPositionPnl(p).netUsd ?? 0), 0);
   const avgPct = positions.length ? positions.reduce((s, p) => s + (p.pnl_pct ?? 0), 0) / positions.length : 0;
   const wr = winRate(lessonsQ.data?.performance);
 

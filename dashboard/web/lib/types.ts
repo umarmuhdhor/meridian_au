@@ -17,6 +17,10 @@ export interface Position {
   total_value_usd?: number;
   total_value_true_usd?: number;
   collected_fees_usd?: number;
+  /** Fees already claimed from this position (Meteora datapi allTimeFees). */
+  claimed_fees_usd?: number | null;
+  /** Meteora's recorded deposit — the entry basis its own PnL uses. */
+  deposit_usd?: number | null;
   pnl_usd?: number;
   pnl_true_usd?: number;
   pnl_pct?: number;

@@ -159,6 +159,20 @@
   100% { background-color: transparent; }
 }
 
+@keyframes mrd-grow-x {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes mrd-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Bar that grows out from its transform-origin on mount (set origin per bar). */
+.mrd-grow { animation: mrd-grow-x 700ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+/* Content block that fades up into place (detail panels, list entries). */
+.mrd-rise { animation: mrd-rise 320ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
 .mrd-pulse { animation: mrd-pulse 2s ease-in-out infinite; }
 .mrd-spin { animation: mrd-spin 0.8s linear infinite; }
 .mrd-flash-up { animation: mrd-flash-up 600ms ease-out; }
@@ -181,6 +195,8 @@
   .mrd-spin,
   .mrd-flash-up,
   .mrd-flash-down,
+  .mrd-grow,
+  .mrd-rise,
   .mrd-skeleton {
     animation: none;
   }

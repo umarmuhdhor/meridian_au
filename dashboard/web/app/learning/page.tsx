@@ -5,9 +5,12 @@ import { useFile } from "@/lib/hooks";
 import { SignalWeightChart } from "@/components/SignalWeightChart";
 import { PerformanceChart } from "@/components/PerformanceChart";
 import { PoolTrendChart } from "@/components/PoolTrendChart";
+import { LearningLoop } from "@/components/LearningLoop";
 import { SkeletonRows, ErrorState } from "@/components/states";
 import { relativeTime } from "@/lib/format";
 import type { SignalWeightsFile, LessonsFile, PoolMemoryFile } from "@/lib/types";
+
+type LearningLoopProps = React.ComponentProps<typeof LearningLoop>;
 
 function Panel({
   title,
@@ -43,6 +46,22 @@ export default function LearningPage() {
           <p className="text-[12px] text-text-tertiary">Signal weighting, closed-trade performance, and per-pool trend.</p>
         </div>
       </div>
+
+      <Panel
+        title="Learning loop"
+        meta={lessonsQ.data?.lessons?.length ? `${lessonsQ.data.lessons.length} lessons` : undefined}
+      >
+        {lessonsQ.isLoading ? (
+          <SkeletonRows rows={5} />
+        ) : lessonsQ.isError ? (
+          <ErrorState message="Failed to load lessons." onRetry={() => lessonsQ.refetch()} />
+        ) : (
+          <LearningLoop
+            lessons={lessonsQ.data?.lessons as unknown as LearningLoopProps["lessons"]}
+            performance={lessonsQ.data?.performance as unknown as LearningLoopProps["performance"]}
+          />
+        )}
+      </Panel>
 
       <Panel
         title="Signal weights"

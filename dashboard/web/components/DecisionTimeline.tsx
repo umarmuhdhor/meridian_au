@@ -35,7 +35,8 @@ function DecisionRow({ d }: { d: Decision }) {
             <div className="flex flex-wrap items-center gap-2">
               <Badge tone={meta.tone}>{meta.label}</Badge>
               {d.actor && <span className="text-[11px] font-medium uppercase tracking-wide text-text-tertiary">{d.actor}</span>}
-              {d.pool && <span className="font-mono text-[12px] text-text-secondary">{d.pool}</span>}
+              {d.pool_name && <span className="text-[12px] font-semibold text-text-primary">{d.pool_name}</span>}
+              {d.pool && <span className="font-mono text-[12px] text-text-tertiary">{d.pool_name ? `${d.pool.slice(0, 6)}…` : d.pool}</span>}
             </div>
             <p className="mt-1 text-[13px] text-text-secondary">{d.summary || d.reason || "-"}</p>
           </div>
@@ -108,15 +109,38 @@ function DecisionRow({ d }: { d: Decision }) {
   );
 }
 
+// The log is uncapped, so render in pages — thousands of rows at once would stall the tab.
+const PAGE = 100;
+
+function matchesQuery(d: Decision, q: string): boolean {
+  if (!q) return true;
+  const hay = [d.pool_name, d.pool, d.position, d.summary, d.reason, d.actor]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return q
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((term) => hay.includes(term));
+}
+
 export function DecisionTimeline({ decisions, showFilters = true }: { decisions: Decision[]; showFilters?: boolean }) {
   const [type, setType] = useState<string>("all");
   const [actor, setActor] = useState<string>("all");
+  const [query, setQuery] = useState("");
+  const [shown, setShown] = useState(PAGE);
 
   const actors = useMemo(() => Array.from(new Set(decisions.map((d) => d.actor).filter(Boolean))) as string[], [decisions]);
 
-  const filtered = decisions.filter(
-    (d) => (type === "all" || d.type === type) && (actor === "all" || d.actor === actor)
+  const filtered = useMemo(
+    () =>
+      decisions.filter(
+        (d) => (type === "all" || d.type === type) && (actor === "all" || d.actor === actor) && matchesQuery(d, query.trim())
+      ),
+    [decisions, type, actor, query]
   );
+  const visible = showFilters ? filtered.slice(0, shown) : filtered;
 
   const selectCls =
     "h-8 rounded-[var(--radius-md)] border border-border-strong bg-surface-2 px-2 text-[13px] text-text-primary";
@@ -125,14 +149,25 @@ export function DecisionTimeline({ decisions, showFilters = true }: { decisions:
     <div className="flex flex-col gap-4">
       {showFilters && (
         <div className="flex flex-wrap items-center gap-2">
-          <select className={selectCls} value={type} onChange={(e) => setType(e.target.value)} aria-label="Filter by type">
+          <input
+            type="search"
+            className={cn(selectCls, "w-full min-w-0 sm:w-64")}
+            placeholder="Search coin, pool, position, reason…"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setShown(PAGE);
+            }}
+            aria-label="Search decisions"
+          />
+          <select className={selectCls} value={type} onChange={(e) => { setType(e.target.value); setShown(PAGE); }} aria-label="Filter by type">
             <option value="all">All types</option>
             <option value="deploy">Deploy</option>
             <option value="close">Close</option>
             <option value="skip">Skip</option>
             <option value="no_deploy">No deploy</option>
           </select>
-          <select className={selectCls} value={actor} onChange={(e) => setActor(e.target.value)} aria-label="Filter by actor">
+          <select className={selectCls} value={actor} onChange={(e) => { setActor(e.target.value); setShown(PAGE); }} aria-label="Filter by actor">
             <option value="all">All actors</option>
             {actors.map((a) => (
               <option key={a} value={a}>
@@ -140,14 +175,25 @@ export function DecisionTimeline({ decisions, showFilters = true }: { decisions:
               </option>
             ))}
           </select>
-          <span className="text-[12px] text-text-tertiary">{filtered.length} shown</span>
+          <span className="text-[12px] text-text-tertiary">
+            {visible.length} of {filtered.length}
+            {filtered.length !== decisions.length ? ` (${decisions.length} total)` : ""}
+          </span>
         </div>
       )}
       <ul className="flex flex-col gap-3">
-        {filtered.map((d, i) => (
+        {visible.map((d, i) => (
           <DecisionRow key={d.id ?? i} d={d} />
         ))}
       </ul>
+      {showFilters && visible.length < filtered.length && (
+        <button
+          onClick={() => setShown((n) => n + PAGE)}
+          className="self-center rounded-[var(--radius-md)] border border-border-strong bg-surface-2 px-4 py-1.5 text-[13px] text-text-secondary hover:text-text-primary"
+        >
+          Load {Math.min(PAGE, filtered.length - visible.length)} more
+        </button>
+      )}
     </div>
   );
 }

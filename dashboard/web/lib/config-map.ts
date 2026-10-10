@@ -119,6 +119,11 @@ export const CONFIG_FIELDS: ConfigField[] = [
   f("healthyFeeVelocityMin", "number", "exit", { unit: "ratio", help: "Smart-exit only. HEALTHY hold: an in-range position earning ≥ this fee/TVL velocity is HELD past the stop to let fees work. 12 ≈ 2× the low-yield floor (minFeePerTvl24h)." }),
   f("sageExitEnabled", "boolean", "exit", { help: "Smart-exit only. Consult Sage on AMBIGUOUS positions (hold-or-cut verdict). false = deterministic conditional fallback (in-range HOLD / out-of-range CLOSE). Requires smartExitEnabled=true. Arm AFTER you trust the deterministic regimes." }),
   f("sageExitCooldownMin", "number", "exit", { unit: "minutes", help: "Smart-exit only. A position escalates to Sage at most once per this many minutes. 20 = 20 min." }),
+  f("bounceExitEnabled", "boolean", "exit", { help: "Smart-exit only. Instead of market-selling a deep loss at the bottom (CATASTROPHIC floor or out-of-range-BELOW DYING), keep the position open and wait for the usual dead-cat bounce: close on a +bounceTakePct% value rebound, a further -bounceStopPct% drop, or after bounceTimeoutMin. Every deep-loss close records a would-have result (bounce_shadow) whether this is on or off — check it before arming." }),
+  f("bounceTakePct", "number", "exit", { unit: "%", help: "Bounce-exit: close once the position's value has recovered this % from its value at the trigger. 15 = +15%." }),
+  f("bounceStopPct", "number", "exit", { unit: "%", help: "Bounce-exit: close if the position's value falls a FURTHER this % below its value at the trigger (replaces the catastrophic floor while watching). 25 = -25%." }),
+  f("bounceTimeoutMin", "number", "exit", { unit: "minutes", help: "Bounce-exit: close after this long if neither the rebound nor the stop was hit. 360 = 6 hours." }),
+  f("closeReviewEnabled", "boolean", "exit", { help: "After every close (win or loss), once Meteora has settled the PnL, ask the LLM WHY it won or lost and save one PREFER/AVOID rule as an auto lesson (Telegram card + Learning page). Also scores the lessons the screener cited at deploy (applied Nx → W/L). Off = no review, no auto lessons, no scoring." }),
 
   // ── rebalance / sweep ──
   f("minFeePerTvl24h", "number", "rebalance", { unit: "ratio", help: "Min 24h fee/TVL before a position is closed as low-yield." }),
@@ -135,6 +140,9 @@ export const CONFIG_FIELDS: ConfigField[] = [
   f("managementModel", "string", "automation", { unit: "model slug", help: "OpenRouter model for the manager, e.g. minimax/minimax-m2.7. Must be an exact slug." }),
   f("screeningModel", "string", "automation", { unit: "model slug", help: "OpenRouter model for the screener. Must be an exact slug." }),
   f("generalModel", "string", "automation", { unit: "model slug", help: "OpenRouter model for chat / Telegram. Must be an exact slug." }),
+  f("learningModel", "string", "automation", { unit: "model slug", help: "Model that reviews routine closes (wins, small losses) and writes the auto lesson. Empty = use managementModel. A cheap model is fine here." }),
+  f("learningImportantModel", "string", "automation", { unit: "model slug", help: "Model for IMPORTANT closes — losses at or below learningImportantLossPct. Put your expensive/strongest model here: these are the lessons that prevent the next big loss. Empty = use learningModel." }),
+  f("learningImportantLossPct", "number", "automation", { unit: "%", help: "A close counts as important when its net PnL is at or below this (e.g. -10 = losses of 10% or worse). Must be 0 or negative. Takes effect on the next review, no restart." }),
 
   // ── follow the wallet ──
   f("followEnabled", "boolean", "follow", { help: "MASTER SWITCH for copy-trading. When on, every ENABLED followed wallet is polled and its DLMM entries/exits are mirrored. Screening, the TA gate, pool/token cooldowns and both blacklists are bypassed on this path — wallet balance and maxPositions still apply. WARNING: turning this OFF closes every open mirrored position on the next follow tick. A mirror has no local exit rules while it is mirrored, so it is unwound rather than left with nothing to close it — this switch executes trades, it is not a safe pause button." }),

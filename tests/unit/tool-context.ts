@@ -95,10 +95,13 @@ export function memLessonRepo(): LessonRepo {
       return { ok: true, value: { lessons, performance } };
     },
     async save(file) {
+      // Copy first — `file` may be the very object load() returned (same arrays).
+      const nextLessons = [...file.lessons];
+      const nextPerformance = [...file.performance];
       lessons.length = 0;
-      lessons.push(...file.lessons);
+      lessons.push(...nextLessons);
       performance.length = 0;
-      performance.push(...file.performance);
+      performance.push(...nextPerformance);
     },
     async listLessons({ role, pinned, tag, limit } = {}) {
       let out = lessons;
@@ -145,7 +148,6 @@ export function memDecisionLog(): DecisionLogRepo {
     },
     async append(entry) {
       decisions.unshift(entry);
-      if (decisions.length > 100) decisions.length = 100;
     },
     async recent(limit = 10) {
       return decisions.slice(0, limit);

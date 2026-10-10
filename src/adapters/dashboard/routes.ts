@@ -208,16 +208,21 @@ export async function handleRequest(
             const ageMinutes = Number.isFinite(deployedMs)
               ? Math.max(0, Math.round((nowMs - deployedMs) / 60_000))
               : (op as { age_minutes?: number | null }).age_minutes ?? null;
-            // Derive pnl_usd from total_value_usd × pnl_pct so the UI has a
-            // dollar figure. Prefer (total - initial) when tracked has
-            // initial_value_usd, else back it out algebraically:
+            // Derive pnl_usd (price only, fees EXCLUDED — same as the History
+            // record) so the UI has a dollar figure. Entry = Meteora's recorded
+            // deposit, else our tracked deploy-time value; with neither, back it
+            // out algebraically:
             //   entry = total / (1 + pnl_pct/100)
             //   pnl_usd = total - entry = total × pnl_pct / (100 + pnl_pct)
+            // The web UI adds claimed + unclaimed fees on top for the net figure
+            // Meteora shows (dashboard/web/lib/position-pnl.ts).
             const totalUsd = (op as { total_value_usd?: number | null }).total_value_usd ?? null;
             const pnlPct = (op as { pnl_pct?: number | null }).pnl_pct ?? null;
+            const entryUsd =
+              (op as { deposit_usd?: number | null }).deposit_usd ?? tracked?.initial_value_usd ?? null;
             let derivedPnlUsd: number | null = null;
-            if (totalUsd != null && tracked?.initial_value_usd != null) {
-              derivedPnlUsd = Math.round((totalUsd - tracked.initial_value_usd) * 100) / 100;
+            if (totalUsd != null && entryUsd != null) {
+              derivedPnlUsd = Math.round((totalUsd - entryUsd) * 100) / 100;
             } else if (totalUsd != null && pnlPct != null && 100 + pnlPct !== 0) {
               derivedPnlUsd = Math.round(((totalUsd * pnlPct) / (100 + pnlPct)) * 100) / 100;
             }

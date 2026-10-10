@@ -64,11 +64,15 @@ export function generateBriefing(input: BriefingInput): BriefingSummary {
     const ms = parseIsoOrNull(r.recorded_at);
     return ms != null && ms > cutoffMs;
   });
-  const netPnlUsd = perfLast.reduce((s, r) => s + toNum(r.pnl_usd), 0);
+  // `pnl_usd` is price movement only; net = pnl_usd + fees (close-pnl.ts semantics), the
+  // figure Meteora and the dashboard History show. A fee-earning position is routinely
+  // negative on price alone, so both the net line and the win rate must include fees.
+  const netOf = (r: (typeof perfLast)[number]) => toNum(r.pnl_usd) + toNum(r.fees_earned_usd);
+  const netPnlUsd = perfLast.reduce((s, r) => s + netOf(r), 0);
   const feesUsd = perfLast.reduce((s, r) => s + toNum(r.fees_earned_usd), 0);
   const winRate =
     perfLast.length > 0
-      ? Math.round((perfLast.filter((r) => toNum(r.pnl_usd) > 0).length / perfLast.length) * 100)
+      ? Math.round((perfLast.filter((r) => netOf(r) > 0).length / perfLast.length) * 100)
       : null;
 
   const newLessons = input.lessons.filter((l) => {

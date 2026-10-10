@@ -39,6 +39,13 @@ export const ManagementConfigSchema = z.object({
   healthyFeeVelocityMin: z.number().nonnegative().default(12),
   sageExitEnabled: z.boolean().default(false),
   sageExitCooldownMin: z.number().int().min(1).default(20),
+  // Bounce-exit — see config-flat.ts + domain/rules/bounce-exit.ts. Dark-launched.
+  bounceExitEnabled: z.boolean().default(false),
+  bounceTakePct: z.number().positive().default(15),
+  bounceStopPct: z.number().positive().max(99).default(25),
+  bounceTimeoutMin: z.number().int().min(1).default(360),
+  /** Post-close review → auto lesson + lesson track record (app/learning/close-review.ts). */
+  closeReviewEnabled: z.boolean().default(true),
 });
 export type ManagementConfig = z.infer<typeof ManagementConfigSchema>;
 
@@ -102,6 +109,15 @@ export const LlmConfigSchema = z.object({
   managementModel: z.string(),
   screeningModel: z.string(),
   generalModel: z.string(),
+  /**
+   * Post-close learning (close review + follow retrospective). "" = use managementModel.
+   * `learningImportantModel` ("" = use learningModel) reviews the closes that matter
+   * most — a loss at or below `learningImportantLossPct` — so an expensive model is only
+   * paid for where a wrong lesson would cost the most.
+   */
+  learningModel: z.string().default(""),
+  learningImportantModel: z.string().default(""),
+  learningImportantLossPct: z.number().max(0).default(-10),
 });
 export type LlmConfig = z.infer<typeof LlmConfigSchema>;
 

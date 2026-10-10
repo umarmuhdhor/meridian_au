@@ -27,8 +27,6 @@ export const DecisionLogFileSchema = z.object({
 });
 export type DecisionLogFile = z.infer<typeof DecisionLogFileSchema>;
 
-export const MAX_DECISIONS = 100 as const;
-
 export function emptyDecisionLog(): DecisionLogFile {
   return { decisions: [] };
 }

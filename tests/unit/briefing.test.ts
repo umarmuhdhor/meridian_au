@@ -87,7 +87,7 @@ describe("generateBriefing", () => {
       lessons: [],
       now: NOW,
     });
-    expect(summary.counts.net_pnl_usd_24h).toBe(35);
+    expect(summary.counts.net_pnl_usd_24h).toBe(41); // (30+3) + (-10+1) + (15+2): fees included
     expect(summary.counts.fees_usd_24h).toBe(6);
     expect(summary.counts.win_rate_pct_24h).toBe(67); // 2 of 3
   });
@@ -150,13 +150,13 @@ describe("generateBriefing", () => {
       lessons: [],
       now: NOW,
     });
-    expect(positive.plain).toContain("+$12.00");
+    expect(positive.plain).toContain("+$14.00"); // 12 + 2 fees
     const negative = generateBriefing({
       positions: [],
       performance: [perfFixture({ pnl_usd: -8, recorded_at: NOW.toISOString() })],
       lessons: [],
       now: NOW,
     });
-    expect(negative.plain).toContain("$-8.00");
+    expect(negative.plain).toContain("$-6.00"); // -8 + 2 fees
   });
 });

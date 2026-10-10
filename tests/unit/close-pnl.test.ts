@@ -86,6 +86,22 @@ describe("enrichCloseResult", () => {
   it("carries Meteora's deposit as the entry value", () => {
     expect(enrichCloseResult(raw, snap).initial_value_usd).toBe(36.3);
   });
+
+  it("fills deposit + hold time from the tracked record when the snapshot lacks them", () => {
+    // The chain snapshot leaves amount_sol / age_minutes null — the close card showed n/a.
+    const r = enrichCloseResult(raw, snap, { amount_sol: 0.5, age_minutes: 135, peak_pnl_pct: 12 });
+    expect(r.amount_sol_initial).toBe(0.5);
+    expect(r.age_minutes).toBe(135);
+    expect(r.peak_pnl_pct).toBe(12);
+    expect(r.pair).toBe("YAP/SOL");
+  });
+
+  it("still enriches from the tracked record when the position is gone from the snapshot", () => {
+    const r = enrichCloseResult(raw, undefined, { amount_sol: 0.5, pool_name: "YAP-SOL" });
+    expect(r.amount_sol_initial).toBe(0.5);
+    expect(r.pair).toBe("YAP-SOL");
+    expect(r.final_pnl_pct).toBeNull();
+  });
 });
 
 function perf(position: string, recordedAt: string, over: Partial<PerformanceRecord> = {}): PerformanceRecord {

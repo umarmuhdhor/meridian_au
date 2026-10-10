@@ -30,6 +30,9 @@ export const TrackedPositionSchema = z.object({
   smart_wallets_present: z.boolean().nullable().optional(),
   /** Multi-timeframe technicals captured at deploy — copied into PerformanceRecord on close. */
   entry_technicals: z.array(TechnicalsSummarySchema).nullable().optional(),
+  /** Screener's stated deploy reason + cited lesson ids — copied into PerformanceRecord on close. */
+  entry_reason: z.string().nullable().optional(),
+  lessons_applied: z.array(z.string()).nullable().optional(),
   deployed_at: z.string(),
   out_of_range_since: z.string().nullable(),
   last_claim_at: z.string().nullable(),
@@ -50,6 +53,16 @@ export const TrackedPositionSchema = z.object({
   /** Last time this position was escalated to Sage for an AMBIGUOUS exit verdict.
    *  Drives the per-position escalation cooldown (management.sageExitCooldownMin). */
   last_sage_exit_escalation_at: z.string().nullable().optional(),
+  /** Armed bounce-exit watch (domain/rules/bounce-exit.ts) — the position stays open
+   *  after a deep-loss trigger until the watch resolves. null/absent = not watching. */
+  bounce_watch: z
+    .object({
+      started_at: z.string(),
+      trigger_pnl_pct: z.number(),
+      trigger_reason: z.string(),
+    })
+    .nullable()
+    .optional(),
 });
 export type TrackedPosition = z.infer<typeof TrackedPositionSchema>;
 

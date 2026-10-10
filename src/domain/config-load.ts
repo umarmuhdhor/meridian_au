@@ -50,6 +50,11 @@ export function flatToNested(flat: FlatUserConfig): AppConfig {
       healthyFeeVelocityMin: flat.healthyFeeVelocityMin,
       sageExitEnabled: flat.sageExitEnabled,
       sageExitCooldownMin: flat.sageExitCooldownMin,
+      bounceExitEnabled: flat.bounceExitEnabled,
+      bounceTakePct: flat.bounceTakePct,
+      bounceStopPct: flat.bounceStopPct,
+      bounceTimeoutMin: flat.bounceTimeoutMin,
+      closeReviewEnabled: flat.closeReviewEnabled,
     },
     strategy: {
       strategy: flat.strategy,
@@ -115,6 +120,9 @@ export function flatToNested(flat: FlatUserConfig): AppConfig {
       managementModel: flat.managementModel,
       screeningModel: flat.screeningModel,
       generalModel: flat.generalModel,
+      learningModel: flat.learningModel,
+      learningImportantModel: flat.learningImportantModel,
+      learningImportantLossPct: flat.learningImportantLossPct,
     },
     hiveMind: {
       url: flat.hiveMindUrl,

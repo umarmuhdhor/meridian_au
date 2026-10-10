@@ -117,5 +117,18 @@ describe("geckoterminal-kline adapter", () => {
     expect(url).toContain("/networks/solana/pools/PA/ohlcv/hour");
     expect(url).toContain("aggregate=4");
     expect(url).toContain("limit=5");
+    expect(url).toContain("currency=usd");
+    expect(url).not.toContain("before_timestamp");
+  });
+
+  it("passes currency + before_timestamp and caches them under separate keys", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse(SAMPLE));
+    const client = createGeckoTerminalKlineClient({ clock: mkClock(), logger: mkLogger(), fetchImpl, ttlMs: 60_000 });
+    await client.getKline("PA", "5m", { limit: 1000, currency: "token", beforeTs: 1_790_000_000.7 });
+    const url = (fetchImpl.mock.calls[0]![0] ?? "") as string;
+    expect(url).toContain("currency=token");
+    expect(url).toContain("before_timestamp=1790000000");
+    await client.getKline("PA", "5m", { limit: 1000 });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });

@@ -52,7 +52,7 @@ interface SdkContainer {
 }
 
 interface PoolHandle {
-  lbPair?: { tokenXMint?: { toBase58: () => string } };
+  lbPair?: { tokenXMint?: { toBase58: () => string }; binStep?: number };
   getActiveBin: () => Promise<{ binId: number; price: string | number; pricePerLamport?: string }>;
   initializePositionAndAddLiquidityByStrategy: (args: {
     positionPubKey: unknown;
@@ -198,10 +198,13 @@ export function createMeteoraWriteHelpers(deps: WritePathsDeps): MeteoraWriteHel
     const pool = await loadPool(deps, args.pool_address);
     const activeBin = await pool.getActiveBin();
     const activePrice = Number(activeBin.price);
-    const binStep =
-      typeof args.bin_step === "number" && Number.isFinite(args.bin_step) && args.bin_step > 0
-        ? args.bin_step
-        : 100;
+    // The pool's own bin step when the caller did not pass one (the LLM often omits it).
+    // Bin ids do not depend on it — only the reported price range and the recorded
+    // bin_step do, and the shadow replay needs the real value.
+    const isStep = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n > 0;
+    const sdkBinStep = Number(pool.lbPair?.binStep);
+    const knownBinStep = isStep(args.bin_step) ? args.bin_step : isStep(sdkBinStep) ? sdkBinStep : undefined;
+    const binStep = knownBinStep ?? 100;
     const plan = planDeploy({
       poolAddress: args.pool_address,
       activeBinId: activeBin.binId,
@@ -315,7 +318,7 @@ export function createMeteoraWriteHelpers(deps: WritePathsDeps): MeteoraWriteHel
       amount_sol: plan.amountY,
       tx: txHashes[0] ?? null,
       dry_run: false,
-      ...(binStep && binStep > 0 ? { bin_step: binStep } : {}),
+      ...(knownBinStep ? { bin_step: knownBinStep } : {}),
     };
   }
 

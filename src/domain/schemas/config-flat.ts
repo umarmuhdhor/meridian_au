@@ -68,6 +68,17 @@ export const FlatUserConfigSchema = z
     sageExitEnabled: z.boolean().default(false),
     // A position escalates to Sage at most once per this many minutes.
     sageExitCooldownMin: z.number().int().min(1).default(20),
+    // Bounce-exit (domain/rules/bounce-exit.ts). Smart-exit only. When on, a deep-loss
+    // trigger (CATASTROPHIC floor, or OOR-below DYING) arms a watch instead of selling
+    // at the capitulation low; the position then closes on a +bounceTakePct% value
+    // rebound, a further -bounceStopPct% drop, or after bounceTimeoutMin minutes.
+    bounceExitEnabled: z.boolean().default(false),
+    bounceTakePct: z.number().positive().default(15),
+    bounceStopPct: z.number().positive().max(99).default(25),
+    bounceTimeoutMin: z.number().int().min(1).default(360),
+    // After each settled close, ask the LLM why it won/lost and save the answer as an
+    // auto lesson; also scores the lessons the screener cited at deploy (W/L counts).
+    closeReviewEnabled: z.boolean().default(true),
 
     // strategy — Sage picks per candidate (see screening/cycle.ts). `strategy` here
     // is only the fallback for legacy positions / Telegram REPL, and the label the
@@ -157,6 +168,9 @@ export const FlatUserConfigSchema = z
     managementModel: z.string().default("healer-alpha"),
     screeningModel: z.string().default("hunter-alpha"),
     generalModel: z.string().default("healer-alpha"),
+    learningModel: z.string().default(""),
+    learningImportantModel: z.string().default(""),
+    learningImportantLossPct: z.number().max(0).default(-10),
 
     // hiveMind
     hiveMindUrl: z.string().default("https://api.agentmeridian.xyz"),

@@ -21,11 +21,36 @@ export function generateOpenAiToolSchemas(registry: ToolRegistry): OpenAiToolSch
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: stripJsonSchemaMeta(
-        zodToJsonSchema(tool.args, { target: "openApi3", $refStrategy: "none" }) as Record<string, unknown>,
-      ),
+      parameters: normalizeExclusiveBounds(
+        stripJsonSchemaMeta(
+          zodToJsonSchema(tool.args, { target: "openApi3", $refStrategy: "none" }) as Record<string, unknown>,
+        ),
+      ) as Record<string, unknown>,
     },
   }));
+}
+
+/**
+ * The openApi3 target emits OpenAPI 3.0's boolean bounds (`{minimum:0, exclusiveMinimum:true}`
+ * for `.positive()`). Strict JSON-Schema validators upstream (glm-5.3 via BandelAI, 2026-10-05)
+ * reject the whole request as "invalid parameters" — every screening cycle failed. Rewrite to
+ * the draft-6+ numeric form (`{exclusiveMinimum:0}`), which every provider accepts.
+ */
+function normalizeExclusiveBounds(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(normalizeExclusiveBounds);
+  if (node === null || typeof node !== "object") return node;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(node)) out[k] = normalizeExclusiveBounds(v);
+  for (const [flag, bound] of [["exclusiveMinimum", "minimum"], ["exclusiveMaximum", "maximum"]] as const) {
+    if (typeof out[flag] !== "boolean") continue;
+    if (out[flag] === true && typeof out[bound] === "number") {
+      out[flag] = out[bound];
+      delete out[bound];
+    } else {
+      delete out[flag];
+    }
+  }
+  return out;
 }
 
 /** Drop `$schema`/`definitions` OpenAI doesn't accept in `parameters`. */

@@ -22,7 +22,7 @@ describe("JsonDecisionLog", () => {
     if (r.ok) expect(r.value.decisions).toEqual([]);
   });
 
-  it("append prepends and caps at 100", async () => {
+  it("append prepends and keeps every entry (no cap)", async () => {
     const dir = await mkTmpDir("dec-cap");
     created.push(dir);
     const repo = createJsonDecisionLog({ filePath: path.join(dir, "d.json"), logger: nullLogger });
@@ -45,6 +45,7 @@ describe("JsonDecisionLog", () => {
     expect(recent).toHaveLength(10);
     expect(recent[0]?.id).toBe("d104");
     const all = await repo.recent(200);
-    expect(all).toHaveLength(100);
+    expect(all).toHaveLength(105);
+    expect(all[104]?.id).toBe("d0");
   });
 });

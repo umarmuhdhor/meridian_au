@@ -3,7 +3,6 @@ import type { Logger } from "../../../ports/logger.js";
 import {
   DecisionLogFileSchema,
   emptyDecisionLog,
-  MAX_DECISIONS,
   type DecisionEntry,
   type DecisionLogFile,
 } from "../../../domain/schemas/decision.js";
@@ -34,8 +33,10 @@ export function createJsonDecisionLog(opts: JsonDecisionLogOptions): DecisionLog
     async append(entry: DecisionEntry) {
       const r = await loadOrEmpty();
       const file = r.ok ? r.value : emptyDecisionLog();
+      // Uncapped since 2026-09-29: the 100-entry ring dropped deploy reasons within
+      // about a day (most entries are `skip`), so "why did we buy X" was unanswerable.
+      // ~80 entries/day × ~500 B ≈ 1.2 MB/month — cheap to keep.
       file.decisions.unshift(entry);
-      file.decisions = file.decisions.slice(0, MAX_DECISIONS);
       await writeJsonAtomic(filePath, file);
     },
 

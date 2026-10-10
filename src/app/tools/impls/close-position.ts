@@ -35,13 +35,25 @@ export const closePositionTool = defineTool({
     } catch {
       snapshot = undefined;
     }
-    // Peak lives only in the tracked record (the live snapshot doesn't carry it);
-    // the close card shows it for trailing-TP exits.
-    const peak = await ctx.repos.positions
-      .get(position_address)
-      .then((t) => t?.peak_pnl_pct ?? null)
-      .catch(() => null);
+    // Peak, deposit and deploy time live only in the tracked record (the live
+    // snapshot doesn't carry them); the close card shows all three.
+    const tracked = await ctx.repos.positions.get(position_address).catch(() => null);
+    const deployedMs = tracked ? Date.parse(tracked.deployed_at) : Number.NaN;
     const raw = await ctx.chain.closePosition(position_address, reason);
-    return enrichCloseResult(raw, snapshot, peak);
+    return enrichCloseResult(
+      raw,
+      snapshot,
+      tracked
+        ? {
+            peak_pnl_pct: tracked.peak_pnl_pct ?? null,
+            amount_sol: tracked.amount_sol,
+            age_minutes: Number.isFinite(deployedMs)
+              ? Math.max(0, Math.floor((ctx.clock.now().getTime() - deployedMs) / 60_000))
+              : null,
+            pool_name: tracked.pool_name ?? null,
+            initial_value_usd: tracked.initial_value_usd ?? null,
+          }
+        : null,
+    );
   },
 });

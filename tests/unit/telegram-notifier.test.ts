@@ -64,12 +64,67 @@ describe("createTelegramNotifier — outbound events", () => {
       dry_run: false,
     });
     const text = String(calls[0]?.body.text);
-    expect(text).toContain("Deployed");
-    expect(text).toContain("bid-ask");
-    expect(text).toContain("100..200");
-    expect(text).toContain("SIG_1");
-    // Meteora deep link for one-tap open
-    expect(text).toContain("https://www.meteora.ag/dlmm/PoolAaaa?referrer=portfolio");
+    expect(calls[0]?.body.parse_mode).toBe("HTML");
+    expect(text).toContain("OPEN");
+    expect(text).toContain("Bid-Ask");
+    expect(text).toContain("100 bins");
+    expect(text).toContain("0.5 SOL");
+    // tappable links instead of raw hashes
+    expect(text).toContain('<a href="https://solscan.io/tx/SIG_1">Tx</a>');
+    expect(text).toContain('<a href="https://www.meteora.ag/dlmm/PoolAaaa?referrer=portfolio">Meteora</a>');
+  });
+
+  it("formats a close event with pnl, deposit, hold time and reason", async () => {
+    const { fetchImpl, calls } = makeStub();
+    const n = createTelegramNotifier({ ...OPTS, fetchImpl });
+    await n.notifyClose({
+      success: true,
+      position_address: "AnTKtEc4xxxxxxxxxxxxrsYV",
+      pool_address: "PoolAaaa",
+      base_mint: null,
+      final_pnl_pct: 0.61,
+      final_value_usd: 59.56,
+      fees_earned_usd: 0.0028,
+      reason: "out_of_range for 30 min",
+      tx: "SIG_2",
+      dry_run: false,
+      pair: "BAGSPAY/SOL",
+      amount_sol_initial: 0.5,
+      age_minutes: 135,
+      peak_pnl_pct: 2.1,
+      initial_value_usd: 59.2,
+    });
+    const text = String(calls[0]?.body.text);
+    expect(text).toContain("CLOSE · PROFIT");
+    expect(text).toContain("BAGSPAY/SOL");
+    expect(text).toContain("+0.61%");
+    expect(text).toContain("puncak +2.10%");
+    expect(text).toContain("0.5 SOL ($59.20)");
+    expect(text).toContain("2 jam 15 mnt");
+    expect(text).toContain("Keluar range (OOR)");
+    expect(text).not.toContain("n/a");
+  });
+
+  it("escapes HTML in names and omits tx links for dry runs", async () => {
+    const { fetchImpl, calls } = makeStub();
+    const n = createTelegramNotifier({ ...OPTS, fetchImpl });
+    await n.notifyClose({
+      success: true,
+      position_address: "PosX",
+      pool_address: "PoolB",
+      base_mint: null,
+      final_pnl_pct: -3,
+      final_value_usd: null,
+      fees_earned_usd: 0,
+      reason: "stop loss",
+      tx: "FAKE",
+      dry_run: true,
+      pair: "<b>EVIL</b>/SOL",
+    });
+    const text = String(calls[0]?.body.text);
+    expect(text).toContain("&lt;b&gt;EVIL&lt;/b&gt;/SOL");
+    expect(text).toContain("CLOSE · RUGI");
+    expect(text).not.toContain("solscan.io/tx");
   });
 
   it("marks dry-run results with [DRY]", async () => {
@@ -166,5 +221,58 @@ describe("network failures", () => {
     });
     const n = createTelegramNotifier({ ...OPTS, fetchImpl });
     await expect(n.notify("info", "hello")).resolves.toBeUndefined();
+  });
+});
+
+describe("footer", () => {
+  it("appends the footer to plain, HTML and live messages", async () => {
+    const { fetchImpl, calls } = makeStub();
+    const n = createTelegramNotifier({ ...OPTS, fetchImpl, footer: async () => "💼 Sisa saldo: 1 SOL" });
+    await n.notify("info", "hello");
+    await n.notifyClaim({ success: true, position_address: "Pos1", claimed_usd: 1, tx: null, dry_run: true });
+    const live = await n.startLive("cycle");
+    await live.note("step");
+    expect(calls.map((c) => c.method)).toEqual(["sendMessage", "sendMessage", "sendMessage", "editMessageText"]);
+    for (const c of calls) expect(String(c.body.text).endsWith("💼 Sisa saldo: 1 SOL")).toBe(true);
+  });
+
+  it("still sends when the footer throws", async () => {
+    const { fetchImpl, calls } = makeStub();
+    const n = createTelegramNotifier({
+      ...OPTS,
+      fetchImpl,
+      footer: async () => {
+        throw new Error("rpc down");
+      },
+    });
+    await n.notify("info", "hello");
+    expect(calls).toHaveLength(1);
+    expect(String(calls[0]?.body.text)).toBe("ℹ️ hello");
+  });
+
+  it("truncates the body, never the footer", async () => {
+    const { fetchImpl, calls } = makeStub();
+    const n = createTelegramNotifier({ ...OPTS, fetchImpl, footer: async () => "FOOTER" });
+    await n.notify("info", "x".repeat(5000));
+    const text = String(calls[0]?.body.text);
+    expect(text.length).toBeLessThanOrEqual(4096);
+    expect(text.endsWith("\n\nFOOTER")).toBe(true);
+  });
+});
+
+describe("swap", () => {
+  it("does not post swap cards to Telegram", async () => {
+    const { fetchImpl, calls } = makeStub();
+    const n = createTelegramNotifier({ ...OPTS, fetchImpl });
+    await n.notifySwap({
+      success: true,
+      input_mint: "8nnaXrGF8nnaXrGF8nnaXrGF",
+      output_mint: "So11111111111111111111111111111111111111112",
+      amount_in: 505847709,
+      amount_out: 8435774,
+      tx: "sig",
+      dry_run: false,
+    });
+    expect(calls).toEqual([]);
   });
 });

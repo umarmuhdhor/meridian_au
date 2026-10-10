@@ -5,6 +5,13 @@ export interface KlineFetchOptions {
   limit?: number;
   /** Bypass any adapter-side cache. */
   force?: boolean;
+  /**
+   * Price denomination: `usd` (default) or `token` = in the pool's quote token (SOL for
+   * our pools). Bin math needs `token` — USD candles carry SOL's own move.
+   */
+  currency?: "usd" | "token";
+  /** Only candles strictly before this unix-seconds time (history replay). */
+  beforeTs?: number;
 }
 
 /**

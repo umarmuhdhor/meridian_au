@@ -128,6 +128,8 @@ export const recordPerformanceHook: PostHook<
     ...(baseMint ? { base_mint: baseMint } : {}),
     ...(tracked?.entry_technicals ? { entry_technicals: tracked.entry_technicals } : {}),
     ...(exitTechnicals ? { exit_technicals: exitTechnicals } : {}),
+    ...(tracked?.entry_reason ? { entry_reason: tracked.entry_reason } : {}),
+    ...(tracked?.lessons_applied?.length ? { lessons_applied: tracked.lessons_applied } : {}),
     ...(tracked?.holders_at_entry != null ? { holders_at_entry: tracked.holders_at_entry } : {}),
     ...(tracked?.smart_wallets_present != null
       ? { smart_wallets_present: tracked.smart_wallets_present }

@@ -12,6 +12,13 @@ import { computeTechnicals, formatTechnicalsLine } from "../../domain/format/tec
 import type { SageExitAdvisor } from "../../ports/sage-exit-advisor.js";
 import { partitionMirrorOwnership } from "../../domain/rules/follow-diff.js";
 import { finalizeClosedPerformance } from "./finalize-performance.js";
+import {
+  armBounceWatch,
+  evaluateBounceWatch,
+  isBounceTrigger,
+  type BounceWatch,
+} from "../../domain/rules/bounce-exit.js";
+import { formatBounceArmed } from "./pnl-poller.js";
 
 const EXIT_ADVISOR_PROMPT = [
   "You are Meridian's DLMM position EXIT advisor. Given ONE open position's live",
@@ -193,6 +200,8 @@ export function planForPosition(
   position: OnChainPosition,
   ctx: Pick<AppContext, "config">,
   technicals?: readonly TechnicalsSummary[],
+  /** Armed bounce-exit watch on this position (smart + bounce mode only) + the tick time. */
+  bounce?: { watch: BounceWatch; now: Date },
 ): PositionPlan {
   const mgmt = ctx.config.management;
   const live = {
@@ -210,6 +219,23 @@ export function planForPosition(
     // "just deployed" and would hold an untracked position's exits forever.
     age_minutes: position.age_minutes ?? null,
   };
+
+  const claimOr = (fallback: PositionPlan): PositionPlan =>
+    position.unclaimed_fees_usd >= mgmt.minClaimAmount
+      ? {
+          ...fallback,
+          action: "CLAIM",
+          reason: `unclaimed_fees_usd ${position.unclaimed_fees_usd.toFixed(2)} ≥ ${mgmt.minClaimAmount}`,
+        }
+      : fallback;
+
+  // A watched position belongs to its bounce watch alone: no take-profit, low-yield or
+  // regime close may sell it at the low the watch is waiting out (domain/rules/bounce-exit.ts).
+  if (mgmt.smartExitEnabled && mgmt.bounceExitEnabled && bounce) {
+    const v = evaluateBounceWatch(bounce.watch, live, bounce.now, mgmt);
+    if (v.action === "CLOSE") return { position, action: "CLOSE", reason: v.reason };
+    return claimOr({ position, action: "STAY", reason: v.reason });
+  }
 
   if (mgmt.smartExitEnabled) {
     // Take-profit / OOR-pump / low-yield still deterministic; the regime engine
@@ -386,9 +412,14 @@ export async function runManagementCycle(deps: ManagementCycleDeps): Promise<Man
   // Fetch OHLCV → technicals per open position (10-min path only; fail-open).
   const techByPos = await enrichPositionTechnicals(oorEnrichedSnapshot, ctx);
 
-  const plans = oorEnrichedSnapshot.map((p) =>
-    planForPosition(p, ctx, techByPos.get(p.position)),
-  );
+  const mgmt = ctx.config.management;
+  const bounceArmed = mgmt.smartExitEnabled && mgmt.bounceExitEnabled;
+  const trackedByPos = new Map((await ctx.repos.positions.all()).map((t) => [t.position, t]));
+  const tickNow = ctx.clock.now();
+  const plans = oorEnrichedSnapshot.map((p) => {
+    const watch = bounceArmed ? trackedByPos.get(p.position)?.bounce_watch : null;
+    return planForPosition(p, ctx, techByPos.get(p.position), watch ? { watch, now: tickNow } : undefined);
+  });
 
   // Follow-the-wallet positions are exempt from every LOCAL exit rule when
   // `follow.exclusiveExit` is on: the followed wallet owns the exit, and the follow
@@ -425,6 +456,38 @@ export async function runManagementCycle(deps: ManagementCycleDeps): Promise<Man
         plan.action = "STAY";
         plan.reason = `follow: exit deferred to the source wallet (local rule was: ${plan.reason})`;
       }
+    }
+  }
+
+  // Bounce-exit: a deep-loss CLOSE (CATASTROPHIC, or OOR-below DYING) arms a watch and
+  // holds instead of selling the capitulation low. Runs after the follow exemption so a
+  // mirror is never armed. No open tracked record to hold the watch → close as before.
+  if (bounceArmed) {
+    for (const plan of plans) {
+      if (plan.action !== "CLOSE" || !isBounceTrigger(plan.regime, plan.position)) continue;
+      const t = trackedByPos.get(plan.position.position);
+      const pnl = plan.position.pnl_pct;
+      if (!t || t.closed || pnl == null) continue;
+      const fresh = await ctx.repos.positions.get(t.position);
+      if (!fresh || fresh.closed) continue;
+      if (!fresh.bounce_watch) {
+        await ctx.repos.positions.upsert({ ...fresh, bounce_watch: armBounceWatch(pnl, plan.reason, ctx.clock.now()) });
+        ctx.logger.warn("management", `bounce-exit armed for ${t.position.slice(0, 8)}… instead of selling the low`, {
+          trigger: plan.reason,
+        });
+        await ctx.notifier
+          .notify("warn", formatBounceArmed(fresh.pool_name ?? t.position.slice(0, 8), pnl, mgmt))
+          .catch(() => {});
+      }
+      plan.action = "STAY";
+      plan.reason = `bounce-exit armed (trigger: ${plan.reason})`;
+    }
+  } else {
+    // Feature off: drop stale watches so re-arming later never times one out on sight.
+    for (const t of trackedByPos.values()) {
+      if (t.closed || !t.bounce_watch) continue;
+      const fresh = await ctx.repos.positions.get(t.position);
+      if (fresh?.bounce_watch) await ctx.repos.positions.upsert({ ...fresh, bounce_watch: null });
     }
   }
 

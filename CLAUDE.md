@@ -137,7 +137,7 @@ config + selects adapters + builds `AppContext`; `main()` (L410-606) wires cron/
 - `rules/scoring.ts:14`, `rules/cooldown.ts:7` (`isPoolOnCooldown`/`isBaseMintOnCooldown`).
 - `schemas/` (15) — `config.ts`/`config-flat.ts`, `position.ts` (TrackedPosition +
   LivePositionSnapshot + `entry_technicals`), `chain.ts`, `market.ts`, `pool-memory.ts`,
-  `strategy.ts`, `decision.ts` (MAX_DECISIONS=100), `lesson.ts` (PerformanceRecord adds
+  `strategy.ts`, `decision.ts` (uncapped since 2026-09-29), `lesson.ts` (PerformanceRecord adds
   `base_mint` + `entry_technicals` + `exit_technicals`), `kline.ts` (KlineCandle,
   KlineTimeframe, TechnicalsSummary), `state.ts`, `study.ts`, `smart-wallet.ts`,
   `blacklist.ts`, `dev-blocklist.ts`.
@@ -189,7 +189,7 @@ on transport so the caller applies its conditional fallback; added 2026-08-29),
   `static-price-oracle`, `fake-kline`.
 - `persistence/json/` — 9 repos over `atomic-write.ts` (temp+fsync+rename, crash-safe):
   `position-repo` (state.json; caps `recentEvents` to 20), `pool-memory-repo`,
-  `lesson-repo`, `decision-log` (caps to 100), `strategy-repo`, `smart-wallet-repo`,
+  `lesson-repo`, `decision-log` (uncapped, ~1 MB/month), `strategy-repo`, `smart-wallet-repo`,
   `token-blacklist-repo`, `dev-blocklist-repo`, `config-repo`. **No `signal-weights`
   repo** (not ported).
 - `swap/jupiter-swap.ts` — **Jupiter Swap/Quote v6**. `llm/openrouter.ts` (real),
@@ -329,8 +329,11 @@ The scheduler skips overlapping ticks per label (the `_busy` guard is built in).
    matches from `recentPerformance`) renders as a `history:` line; the aggregate
    `computePortfolioAggregate` (buckets by strategy / volatility / entry_mcap over
    last 30 closes) appends `PRIOR EXPERIENCE:` to the `goal` block. `── LESSONS ──`
-   (pinned + recent 5) is injected into both the local-loop `buildSystemPrompt` AND
-   the Sage `sageSystemPrompt`.
+   is injected into both the local-loop `buildSystemPrompt` AND the Sage
+   `sageSystemPrompt`, via `domain/prompt/lessons.ts` (`selectPromptLessons`): **every
+   pinned lesson** (newest first) + the 8 newest unpinned, each rendered with its `[id]`
+   and W/L track record. (Until 2026-09-29 it took the *first* 5 pinned of the *last* 20
+   lessons — the newest pins, incl. the curve ban, never reached the LLM.) See § Learning loop.
 7. **Decision** — two deciders, selected by `MERIDIAN_DECIDER`:
    - default (`loop`): SCREENER prompt + candidate block, `runAgentLoop` `maxSteps:8`,
      `requireToolOnFirstStep:true` — the local LLM must call `deploy_position` (or justify).
@@ -450,6 +453,93 @@ management cycle runs the full classifier with fresh OHLCV. **Dark-launch: defau
 still classified + logged (shadow) for a review window. Arm via dashboard Config (Exit
 rules tab): `smartExitEnabled` first, `sageExitEnabled` second. Config field `stopLossPct`
 becomes the *attention* threshold (not a hard close) in smart mode.
+
+### Bounce-exit (`bounceExitEnabled`, 2026-10-10)
+
+`domain/rules/bounce-exit.ts`. Smart mode only. The two deep-loss triggers — CATASTROPHIC,
+and DYING once price is out of range BELOW (`isBounceTrigger`) — used to sell at once,
+i.e. on the capitulation low (audit: price rebounded ≥10–15% within 6h after ~10 of 12
+such cuts). With the flag on, the trigger instead stores `bounce_watch` on the tracked
+position and holds; the watch then OWNS the position (no TP / low-yield / regime / fast-cut
+/ trailing-TP) until it closes on **take** (value +`bounceTakePct` from the trigger value,
+15), **stop** (a further −`bounceStopPct`, 25 — replaces the catastrophic floor while
+watching) or **timeout** (`bounceTimeoutMin`, 360). Value = 1 + pnl_pct/100. Both the poller
+(`bounce_arm` action → `armWatch`) and management (arming after the follow exemption) can
+arm; an already-armed record is never re-armed. No open tracked record to hold the watch →
+close as before. Flag off → management clears stale watches. Close reasons start with
+`bounce-exit (take|stop|timeout)`. A Telegram `⏳ Bounce watch` line is sent on arm.
+**Shadow** (`app/learning/bounce-shadow.ts`, runs after close-review in the same 5-min job,
+always on): every deep-loss close (pnl ≤ −5%, reason matches `isBounceEligibleCloseReason`)
+gets `bounce_shadow` on its PerformanceRecord once the window has passed — the take/stop/
+timeout replay over 5m SOL candles (`simulateBounceExit`, stop checked before take inside a
+bar) and `delta_pct` vs the real sale. Observation only; read it before arming.
+
+---
+
+## Learning loop (close → lesson → next deploy, 2026-09-29)
+
+"Learning" is prompt memory, not training. Three channels feed the next screening cycle:
+
+1. **Numbers (automatic)** — `record-performance` post-hook writes a PerformanceRecord on
+   every close; screening renders it as per-candidate `history:` lines + `PRIOR EXPERIENCE`
+   buckets. Context only; the LLM may ignore it.
+2. **Cooldown (automatic, enforced)** — `set-cooldown` blocks the token after a LOSS close
+   (`repeatDeployCooldownHours`, scope `token`). The only channel code enforces.
+3. **Lessons (text rules)** — manual (`add_lesson`, dashboard) and, since 2026-09-29,
+   **automatic via the close review** (`src/app/learning/close-review.ts`, scheduled every
+   5 min in `daemon.ts`, gated per tick on `management.closeReviewEnabled`, default true):
+   - The SCREENER passes `reason` + `lessons_applied` (lesson ids) to `deploy_position`;
+     they flow to the decision log (`metrics.lessons_applied`), the tracked position and
+     the PerformanceRecord (`entry_reason`, `lessons_applied`).
+   - Once a close is settled (`pnl_source:"meteora_closed"`, or 20 min passed), the review:
+     (a) **deterministically** bumps `stats.{applied,wins,losses}` on each cited lesson
+     (win = `pnl_pct > 0`, net of fees) — rendered in prompts as `(applied Nx → W/L)`;
+     (b) asks the LLM WHAT/WHY/LESSON and saves one unpinned `sourceType:"close-review"`
+     lesson tagged `auto` (`[auto WIN|LOSS POOL ±x%] rule`); (c) stamps `review` on the
+     PerformanceRecord. **No Telegram card** (removed 2026-10-09 — too long for the group);
+     the dashboard is the only surface. Dashboard →
+     **Pelajaran** (`dashboard/web/app/pelajaran/page.tsx`) is the full per-position story
+     (entry reason + cited lessons + entry/exit technicals → what/why/new lesson, win vs
+     loss columns, lesson track record, one-click pin); Learning → "Learning loop" is the
+     compact view.
+   - Follow mirrors are skipped (they have `follow/learn.ts`). 24h lookback, ≤3 per tick,
+     LLM retried 3× then reviewed without a lesson (scores still apply). One
+     load→mutate→`save` of lessons.json per record, re-checked so nothing is scored twice.
+   - Auto lessons are unpinned → they rotate out of the 8-slot RECENT window. Pinning is
+     the human's "keep this forever" decision.
+   - **Auto lessons must be NARROW (MATCH-backtested, 2026-10-07).** Single-factor rules
+     blocked more winners than losers (`fee_tvl_ratio < 1.0` → 27W/14L, `1h.from_high < -30`
+     → 13W/8L), i.e. the bot was learning to skip good coins. Now both the close review and
+     follow-learn (`follow/learn.ts` `learnFromMirror`) must emit a `MATCH:` line — 2–4 AND'd
+     conditions in screener vocabulary (`fee_tvl_ratio`, `mcap`, `1h.from_high`, `15m.spike`,
+     … — `domain/rules/lesson-match.ts`). `checkMatch` backtests it over past trades: an
+     AVOID may hit no past winner (or 1 if it also catches ≥3 losers), PREFER mirrors that
+     against losers. The model sees its trade's lookalike opposite-outcome trades up front
+     and gets up to 2 "too broad — it also matches X, Y" refinement turns
+     (`app/learning/matched-lesson.ts`); still too broad → no lesson, review note
+     `rule_too_broad`. The stored lesson carries `match` + `backtest` and the rule text ends
+     with `{applies ONLY when: … — history NW/ML}`.
+   - **Matched lessons are delivered per candidate, not in LESSONS.** The screening cycle
+     evaluates every lesson's MATCH against each candidate's entry fields + technicals
+     (`lessonsForCandidate`) and prints hits on that candidate's `lessons:` line; unpinned
+     MATCH lessons are removed from the general LESSONS block (`splitMatchedLessons`), so
+     they neither spill onto other coins nor compete for the 8 RECENT slots. A `strategy`
+     condition is not evaluated pre-decision — it is shown as "only if you choose spot".
+   - **Shadow mode (2026-10-08, `app/learning/shadow-replay.ts`)** — the close review also
+     replays the closed position as spot AND bid_ask from GeckoTerminal 5m SOL-quoted candles
+     (`domain/rules/strategy-sim.ts`: exact ex-fee value from entry/exit price + bin weights,
+     fees rescaled from the real ones by volume × weight per bin), stamps `shadow` on the
+     PerformanceRecord (read it from lessons.json / the backtest CLI; no Telegram line).
+     **Observation only** — deliberately NOT in the reviewer prompt, the screener prompt or
+     lesson MATCH, so trading is unchanged until the user opts into live bid_ask probes. Fails
+     open (no candles / no `bin_step` → no shadow). Same replay, offline over all history:
+     `npx tsx src/entrypoints/backtest-strategy.ts --out report.json` (read-only). The deploy
+     write path now records the pool's real `bin_step` (from the SDK `lbPair`) when the LLM
+     omits it — before, those records had none and could not be replayed.
+   - Reviewer budget is 8000 tokens: glm-5.3 thinks 1–6k tokens first. At the old 400 every
+     reply was cut to `"WHAT"` and silently recorded as LESSON: NONE (29 Sep–7 Oct). A
+     truncated/shapeless reply now counts as a failed call and is retried. One-off repair
+     CLI: `src/entrypoints/backfill-close-reviews.ts` (`--redo`, `--follow`, dry-run default).
 
 ---
 
@@ -617,10 +707,10 @@ retry-on-failure, and a hand-edited config then drains identically.
 
 | File | Repo | Owns |
 |---|---|---|
-| `state.json` | position-repo | tracked positions (+`entry_technicals` since 2026-08-10, +`last_sage_exit_escalation_at` since 2026-08-29) + recent-events ring (capped 20) |
+| `state.json` | position-repo | tracked positions (+`entry_technicals` since 2026-08-10, +`last_sage_exit_escalation_at` since 2026-08-29, +`bounce_watch` since 2026-10-10) + recent-events ring (capped 20) |
 | `pool-memory.json` | pool-memory-repo | per-pool deploy history, win rates, cooldowns |
-| `lessons.json` | lesson-repo | lessons + performance records (PerformanceRecord now carries `base_mint`, `entry_technicals`, `exit_technicals`, `pnl_source`) |
-| `decision-log.json` | decision-log | rolling 100 decisions (deploy/close/skip/no_deploy/note) |
+| `lessons.json` | lesson-repo | lessons (+`stats` W/L track record) + performance records (PerformanceRecord now carries `base_mint`, `entry_technicals`, `exit_technicals`, `pnl_source`, `entry_reason`, `lessons_applied`, `review`, `shadow`, `bounce_shadow`) |
+| `decision-log.json` | decision-log | every decision, newest first (deploy/close/skip/no_deploy/note). **Uncapped since 2026-09-29** — the old 100-entry ring lost deploy reasons within a day. Readers must not parse it on a hot path (the SSE hub `stat`s it) and UIs must paginate (`DecisionTimeline` renders 100 at a time + search) |
 | `strategy-library.json` | strategy-repo | saved strategies + active pointer |
 | `smart-wallets.json` | smart-wallet-repo | tracked KOL/alpha wallets (type lp\|holder) |
 | `token-blacklist.json` | token-blacklist-repo | mint → reason |
@@ -656,7 +746,16 @@ passthrough in `redact.ts`). On the current homeserver both the state files and
 - **Smart-exit keys** (`management`, added 2026-08-29): `smartExitEnabled` (false),
   `exitHardFloorPct` (−25), `exitOorProxyPct` (−12), `dyingConsecutiveRed` (4),
   `dyingAtrCollapsePct` (10), `healthyFeeVelocityMin` (12), `sageExitEnabled` (false),
-  `sageExitCooldownMin` (20). **Entry key** (`screening`): `maxFromHighPct` (35).
+  `sageExitCooldownMin` (20), `closeReviewEnabled` (true — § Learning loop),
+  `bounceExitEnabled` (false), `bounceTakePct` (15), `bounceStopPct` (25),
+  `bounceTimeoutMin` (360) — § Bounce-exit.
+  **Entry key** (`screening`): `maxFromHighPct` (35).
+  **Learning-model keys** (`llm`, 2026-10-07): `learningModel` ("" → managementModel) reviews
+  routine closes; `learningImportantModel` ("" → learningModel) reviews losses with net
+  pnl ≤ `learningImportantLossPct` (−10). Pure choice in `domain/rules/learning-model.ts`;
+  `daemon.ts` passes a per-call resolver (`modelFor` / `learningModelFor`) to close-review
+  and follow-learn, so dashboard edits apply on the next review. `LLM_MODEL` env / demo
+  still override. The chosen model is stored as `review.model`.
   All have flat-schema defaults, so a live config missing them gets the defaults at boot
   (no manual edit).
 - **Follow-the-wallet keys** (`follow`, added 2026-09-20): `followEnabled` (false),
@@ -734,6 +833,12 @@ cron control `/pause /resume /stop` (need `scheduler`/`shutdown` deps); write co
 `/close <n> /closeall /deploy <pool> [sol]` (gated on `deps.writesEnabled`). Free-form
 text → GENERAL agent tick (`GENERAL_TOOLS`, `maxSteps:8`). **Auth (chat-id / user
 allowlist) is upstream** (the inbound adapter), not in the router.
+
+**Wallet footer** (2026-10-09): every outbound message ends with a "💼 Sisa saldo / 📉 Total
+rugi" footer (`app/notify/wallet-footer.ts`, passed as `footer` to `createTelegramNotifier`):
+wallet SOL + open positions (cached `getMyPositions`), sum of losing closes and net, in SOL.
+4s timeout; any failure sends the message without it. **Swap cards are not posted**
+(`notifySwap` only logs) — every close auto-swaps, so they were pure noise.
 
 **Notify-only mode**: with `MERIDIAN_TELEGRAM_INBOUND=false` the daemon never starts
 the inbound REPL — only posts outbound deploy/close cards. Use it when the bot token is

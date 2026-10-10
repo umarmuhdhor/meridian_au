@@ -44,6 +44,7 @@ import type { SageExitAdvisor } from "../ports/sage-exit-advisor.js";
 import type { SageDecider } from "../ports/sage-decider.js";
 import { createCollectingNotifier } from "../adapters/notify/collecting-notifier.js";
 import { createTelegramNotifier } from "../adapters/notify/telegram.js";
+import { createWalletFooter } from "../app/notify/wallet-footer.js";
 import type { Notifier } from "../ports/notifier.js";
 import { createFakePoolDiscovery } from "../adapters/market/fake-pool-discovery.js";
 import { createFakeTokenInfo } from "../adapters/market/fake-token-info.js";
@@ -113,6 +114,9 @@ import { createIntervalScheduler } from "../adapters/scheduler/interval.js";
 import { runScreeningCycle } from "../app/screening/cycle.js";
 import { runManagementCycle } from "../app/management/cycle.js";
 import { createPnlPoller } from "../app/management/pnl-poller.js";
+import { CLOSE_REVIEW_INTERVAL_MS, runCloseReview } from "../app/learning/close-review.js";
+import { runBounceShadow } from "../app/learning/bounce-shadow.js";
+import { learningModelFor } from "../domain/rules/learning-model.js";
 import { createDustSweeper } from "../app/management/dust-sweeper.js";
 import { runBriefingCycle } from "../app/briefing/cycle.js";
 import { runHealthCycle } from "../app/health/cycle.js";
@@ -320,7 +324,12 @@ async function boot(): Promise<BootResult> {
   const telegramChatId = process.env.TELEGRAM_CHAT_ID;
   const notifier: Notifier =
     telegramToken && telegramChatId
-      ? createTelegramNotifier({ botToken: telegramToken, chatId: telegramChatId, logger })
+      ? createTelegramNotifier({
+          botToken: telegramToken,
+          chatId: telegramChatId,
+          logger,
+          footer: createWalletFooter({ chain, lessons, logger }),
+        })
       : createCollectingNotifier();
   logger.info("boot", `notifier: ${telegramToken && telegramChatId ? "telegram" : "collecting"}`);
 
@@ -489,6 +498,10 @@ async function main(): Promise<void> {
     if (role === "management") return llm.managementModel;
     return llm.generalModel;
   };
+  // Post-close learning: cheap model for routine closes, llm.learningImportantModel for
+  // big losses. Read per call (hot-reloadable); LLM_MODEL / demo still override.
+  const learningModel = (pnlPct: number): string =>
+    process.env.LLM_MODEL || usingDemoLLM ? modelFor("management") : learningModelFor(ctx.config.llm, pnlPct).model;
 
   // ── Sage delegation — Sage is the final authority whenever creds are present.
   // Enabled automatically when SAGE_BASE_URL + SAGE_API_KEY are set. Opt out
@@ -598,6 +611,7 @@ async function main(): Promise<void> {
       scheduler,
       positionRepo: ctx.repos.positions,
       config: ctx.config.management,
+      notifier: ctx.notifier,
       // Follow mirrors are exempt from trailing-TP and the fast-cut — the followed
       // wallet owns the exit. Both are passed unconditionally and the poller reads
       // `exclusiveExit` off the live section each tick, so toggling it from the
@@ -646,6 +660,7 @@ async function main(): Promise<void> {
       // call time, so withholding the client here would make turning it on a no-op.
       llm,
       model: modelFor("management"),
+      learningModelFor: learningModel,
     });
     const followed = await ctx.repos.follow.listWallets();
     console.log(
@@ -668,6 +683,31 @@ async function main(): Promise<void> {
       "health",
     );
     console.log(`  health-check: every ${healthMs / 1000}s`);
+
+    // Post-close learning: auto lesson per settled close + W/L score for cited lessons.
+    // closeReviewEnabled is read per tick (hot-reloadable from the dashboard Config page).
+    // The bounce-exit shadow rides the same job, AFTER the review: both rewrite
+    // lessons.json, and running them back-to-back keeps one from clobbering the other.
+    const closeReviewAttempts = new Map<string, number>();
+    const bounceShadowAttempts = new Map<string, number>();
+    scheduler.every(
+      CLOSE_REVIEW_INTERVAL_MS,
+      () =>
+        runCloseReview({
+          ctx,
+          llm: usingDemoLLM ? undefined : llm,
+          model: modelFor("management"),
+          modelFor: learningModel,
+          attempts: closeReviewAttempts,
+        })
+          .then(() => runBounceShadow(ctx, bounceShadowAttempts))
+          .then(() => {}),
+      "close-review",
+    );
+    console.log(
+      `  close-review: every ${CLOSE_REVIEW_INTERVAL_MS / 60_000}m (closeReviewEnabled=${ctx.config.management.closeReviewEnabled}) — ` +
+        `model ${learningModel(0)}, losses ≤ ${ctx.config.llm.learningImportantLossPct}% → ${learningModel(ctx.config.llm.learningImportantLossPct)}`,
+    );
 
     const briefingIntervalMs = 24 * 3_600_000;
     scheduler.every(

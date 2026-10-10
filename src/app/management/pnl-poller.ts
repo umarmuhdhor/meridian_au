@@ -7,9 +7,11 @@ import type { FollowRepo } from "../../ports/follow-repo.js";
 import type { FollowConfig } from "../../domain/schemas/config.js";
 import type { ManagementConfig } from "../../domain/schemas/config.js";
 import type { OnChainPosition, PositionsSnapshot } from "../../domain/schemas/chain.js";
+import type { Notifier } from "../../ports/notifier.js";
 import { assessPnl } from "../../domain/rules/pnl.js";
 import { partitionMirrorOwnership } from "../../domain/rules/follow-diff.js";
 import { getPollerFastCut } from "../../domain/rules/close-rules.js";
+import { armBounceWatch, evaluateBounceWatch, type BounceWatch } from "../../domain/rules/bounce-exit.js";
 import type { CloseViaToolOutcome } from "../tools/close-via-tool.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
@@ -24,6 +26,17 @@ export interface PendingConfirm {
   queuedAtMs: number;
   reason: string;
 }
+
+export interface PollerAction {
+  kind: "close_confirmed" | "fast_cut" | "bounce_arm";
+  positionAddress: string;
+  reason: string;
+  /** bounce_arm only — the pnl the watch is measured from. */
+  triggerPnlPct?: number;
+}
+
+/** Live snapshot + the per-position state the poller merges in from the tracking store. */
+type PollerPosition = OnChainPosition & { _peakPnlPct?: number | null; _bounceWatch?: BounceWatch | null };
 
 /**
  * Pure — returns actions to take + the next pending-confirm queue.
@@ -45,9 +58,9 @@ export function tickPnlPoller(
   now: Date,
   mgmt: ManagementConfig,
   cfg: { confirmDelayMs: number; confirmTolerancePct: number },
-): { next: PendingConfirm[]; actions: Array<{ kind: "close_confirmed" | "fast_cut"; positionAddress: string; reason: string }> } {
+): { next: PendingConfirm[]; actions: PollerAction[] } {
   const nowMs = now.getTime();
-  const actions: Array<{ kind: "close_confirmed" | "fast_cut"; positionAddress: string; reason: string }> = [];
+  const actions: PollerAction[] = [];
 
   // Fast lookup live → snapshot.
   const bySnap = new Map<string, OnChainPosition>();
@@ -57,9 +70,20 @@ export function tickPnlPoller(
   // proxy. Immediate (no two-phase confirm — these states are unambiguous). Gated
   // on smartExitEnabled so the dark-launch default leaves poller behavior unchanged.
   // Positions cut here are skipped by the trailing-TP scan below.
+  //
+  // Bounce-exit (bounceExitEnabled): a fast-cut ARMS a watch instead of closing, and a
+  // position already being watched is owned by its watch alone — it resolves to a
+  // take/stop/timeout close or holds, and never re-enters the fast-cut or trailing-TP.
   const fastCutAddrs = new Set<string>();
   if (mgmt.smartExitEnabled) {
-    for (const p of snapshot.positions) {
+    for (const p of snapshot.positions as PollerPosition[]) {
+      const watch = mgmt.bounceExitEnabled ? (p._bounceWatch ?? null) : null;
+      if (watch) {
+        fastCutAddrs.add(p.position);
+        const v = evaluateBounceWatch(watch, p, now, mgmt);
+        if (v.action === "CLOSE") actions.push({ kind: "fast_cut", positionAddress: p.position, reason: v.reason });
+        continue;
+      }
       const reason = getPollerFastCut(
         {
           pnl_pct: p.pnl_pct,
@@ -72,7 +96,12 @@ export function tickPnlPoller(
         mgmt,
       );
       if (reason) {
-        actions.push({ kind: "fast_cut", positionAddress: p.position, reason });
+        // getPollerFastCut only fires on a readable pnl, so pnl_pct is non-null here.
+        actions.push(
+          mgmt.bounceExitEnabled && p.pnl_pct != null
+            ? { kind: "bounce_arm", positionAddress: p.position, reason, triggerPnlPct: p.pnl_pct }
+            : { kind: "fast_cut", positionAddress: p.position, reason },
+        );
         fastCutAddrs.add(p.position);
       }
     }
@@ -114,7 +143,7 @@ export function tickPnlPoller(
       if (consumedThisTick.has(p.position)) continue; // already resolved this tick
       // The peak comes from the tracked position — the live snapshot doesn't carry it.
       // Callers merge it in before calling `tickPnlPoller` (see `createPnlPoller`).
-      const peak = (p as OnChainPosition & { _peakPnlPct?: number })._peakPnlPct ?? null;
+      const peak = (p as PollerPosition)._peakPnlPct ?? null;
       if (peak == null) continue;
       const pnl = assessPnl(p.pnl_pct, null, mgmt.pnlSanityMaxDiffPct);
       if (pnl.pnl_pct_suspicious || pnl.pnl_pct == null) continue;
@@ -153,6 +182,8 @@ export interface PnlPollerDeps {
   scheduler: Scheduler;
   positionRepo: PositionRepo;
   config: ManagementConfig;
+  /** Optional — a bounce-exit watch being armed is announced here. */
+  notifier?: Notifier;
   /**
    * When both are present AND `followConfig.exclusiveExit` reads true at TICK time,
    * positions held by an open follow mirror are removed from the tick entirely — no
@@ -167,6 +198,19 @@ export interface PnlPollerDeps {
   pollIntervalMs?: number;
   confirmDelayMs?: number;
   confirmTolerancePct?: number;
+}
+
+/** Telegram text for a newly armed bounce watch (shared with the management cycle). */
+export function formatBounceArmed(
+  pool: string,
+  triggerPnlPct: number,
+  cfg: Pick<ManagementConfig, "bounceTakePct" | "bounceStopPct" | "bounceTimeoutMin">,
+): string {
+  return (
+    `⏳ Bounce watch ${pool}: pnl ${triggerPnlPct.toFixed(1)}% — tidak dijual di dasar. ` +
+    `Tutup saat nilai pulih +${cfg.bounceTakePct}%, turun lagi −${cfg.bounceStopPct}%, ` +
+    `atau setelah ${cfg.bounceTimeoutMin} menit.`
+  );
 }
 
 export interface PnlPollerHandle {
@@ -195,6 +239,37 @@ export function createPnlPoller(deps: PnlPollerDeps): PnlPollerHandle {
 
   let pending: PendingConfirm[] = [];
   let busy = false;
+
+  /**
+   * Persist a bounce watch on the tracked position. Returns false when there is no
+   * open tracked record to hold it (the caller then closes, as before bounce-exit).
+   * An already-armed record counts as armed: the management cycle got there first.
+   */
+  async function armWatch(a: PollerAction): Promise<boolean> {
+    try {
+      const tracked = await deps.positionRepo.get(a.positionAddress);
+      if (!tracked || tracked.closed || a.triggerPnlPct == null) return false;
+      if (tracked.bounce_watch) return true;
+      const watch = armBounceWatch(a.triggerPnlPct, a.reason, deps.clock.now());
+      await deps.positionRepo.upsert({ ...tracked, bounce_watch: watch });
+      const cfg = deps.config;
+      deps.logger.warn("pnl-poller", `bounce-exit armed for ${a.positionAddress.slice(0, 8)}… instead of selling the low`, {
+        trigger: a.reason,
+        take_pct: cfg.bounceTakePct,
+        stop_pct: cfg.bounceStopPct,
+        timeout_min: cfg.bounceTimeoutMin,
+      });
+      await deps.notifier
+        ?.notify("warn", formatBounceArmed(tracked.pool_name ?? a.positionAddress.slice(0, 8), a.triggerPnlPct, cfg))
+        .catch(() => {});
+      return true;
+    } catch (err) {
+      deps.logger.error("pnl-poller", `bounce-exit arm failed for ${a.positionAddress.slice(0, 8)}…`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
 
   async function runTick(): Promise<void> {
     if (busy) return;
@@ -248,7 +323,8 @@ export function createPnlPoller(deps: PnlPollerDeps): PnlPollerHandle {
               ...p,
               age_minutes: age,
               _peakPnlPct: tracked?.peak_pnl_pct ?? null,
-            } as OnChainPosition;
+              _bounceWatch: tracked && !tracked.closed ? (tracked.bounce_watch ?? null) : null,
+            } as PollerPosition;
           }),
         ),
       };
@@ -262,8 +338,12 @@ export function createPnlPoller(deps: PnlPollerDeps): PnlPollerHandle {
       pending = next;
 
       for (const a of actions) {
+        if (a.kind === "bounce_arm") {
+          if (await armWatch(a)) continue;
+          // Could not persist a watch → fall through and close, the pre-bounce behaviour.
+        }
         try {
-          const label = a.kind === "fast_cut" ? "smart-exit fast-cut" : "trailing-TP confirmed close";
+          const label = a.kind === "close_confirmed" ? "trailing-TP confirmed close" : "smart-exit fast-cut";
           deps.logger.warn("pnl-poller", `${label} for ${a.positionAddress.slice(0, 8)}…`, {
             reason: a.reason,
           });

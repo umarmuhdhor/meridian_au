@@ -4,6 +4,7 @@ import type { Lesson, PerformanceRecord } from "../schemas/lesson.js";
 import type { StrategyEntry } from "../schemas/strategy.js";
 import type { PositionsSnapshot } from "../schemas/chain.js";
 import type { WalletBalance } from "../schemas/chain.js";
+import { formatLessonsBlock, selectPromptLessons } from "./lessons.js";
 
 export type AgentRole = "SCREENER" | "MANAGER" | "GENERAL";
 
@@ -57,12 +58,7 @@ function summarizePerformance(records: PerformanceRecord[]): string {
 
 function summarizeLessons(lessons: Lesson[]): string {
   if (!lessons.length) return "";
-  const pinned = lessons.filter((l) => l.pinned).slice(0, 5);
-  const recent = lessons.filter((l) => !l.pinned).slice(-5);
-  const parts: string[] = [];
-  if (pinned.length) parts.push(`PINNED: ${pinned.map((l) => l.rule).join(" | ")}`);
-  if (recent.length) parts.push(`RECENT: ${recent.map((l) => l.rule).join(" | ")}`);
-  return parts.join("\n");
+  return formatLessonsBlock(selectPromptLessons(lessons));
 }
 
 function roleInstructions(role: AgentRole): string {
@@ -73,6 +69,8 @@ function roleInstructions(role: AgentRole): string {
         "Decide whether to open a new position. Prefer to call `deploy_position` only when a candidate meets the active strategy AND has confirmed activity/organic signals.",
         "No hallucination — do not claim to have deployed unless `deploy_position` was called and returned success=true.",
         "bins_below FLOOR: 35. Never call deploy_position with bins_below < 35.",
+        "Strategy: spot or bid_ask only. curve is FORBIDDEN (user mandate 2026-09-25) — never deploy curve, whatever an older lesson says.",
+        "When you call deploy_position, always fill `reason` (1-2 sentences: why this pool and this strategy, citing the numbers) and `lessons_applied` (the [ids] of the LESSONS that shaped this decision; [] if none did). These are recorded and scored after the position closes.",
       ].join("\n");
     case "MANAGER":
       return [

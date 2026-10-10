@@ -23,6 +23,7 @@ function fakeConnection(): SolanaConnection {
 
 interface PoolStub {
   activeBinId: number;
+  binStep?: number;
   hasLiquidity: boolean;
   claimTxs: unknown[];
 }
@@ -57,7 +58,7 @@ function makeSdk(pool: PoolStub): {
   const sdk: SdkNamespace = {
     default: {
       create: async () => ({
-        lbPair: { tokenXMint: { toBase58: () => "BaseMintAaaa" } },
+        lbPair: { tokenXMint: { toBase58: () => "BaseMintAaaa" }, binStep: pool.binStep },
         getActiveBin: async () => ({
           binId: pool.activeBinId,
           price: 1.05,
@@ -101,6 +102,16 @@ function makeDeps(sdk: SdkNamespace, sendTxImpl?: (tx: unknown, signers: unknown
 }
 
 describe("createMeteoraWriteHelpers.deploy", () => {
+  it("reports the pool's own bin_step when the caller omits it, and none when unknown", async () => {
+    const args = { pool_address: "PoolAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", amount_sol: 0.5, strategy: "spot" as const, bins_below: 40, bins_above: 0 };
+    const known = makeSdk({ activeBinId: 500, hasLiquidity: false, claimTxs: [], binStep: 80 });
+    expect((await createMeteoraWriteHelpers(makeDeps(known.sdk).deps).deploy(args)).bin_step).toBe(80);
+    const unknown = makeSdk({ activeBinId: 500, hasLiquidity: false, claimTxs: [] });
+    const r = await createMeteoraWriteHelpers(makeDeps(unknown.sdk).deps).deploy(args);
+    expect(r.success).toBe(true);
+    expect(r.bin_step).toBeUndefined(); // the 100 fallback is for price display only, never recorded
+  });
+
   it("plans, initializes, sends, and returns a DeployResult", async () => {
     const { sdk, spy } = makeSdk({ activeBinId: 500, hasLiquidity: false, claimTxs: [] });
     const { deps, sendTx, newPositionKeypair } = makeDeps(sdk);

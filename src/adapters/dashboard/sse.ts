@@ -4,7 +4,7 @@
 // dashboard/bridge/sse.js — the module singleton becomes a per-bridge factory bound to
 // the injected chain client + position repo + state dir.
 
-import { readFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { ServerResponse } from "node:http";
 import type { ChainClient } from "../../ports/chain-client.js";
@@ -24,7 +24,7 @@ export interface SseHub {
 export function createSseHub(deps: SseHubDeps): SseHub {
   const subs = new Set<ServerResponse>();
   let timer: NodeJS.Timeout | null = null;
-  let lastDecisionCount = -1;
+  let lastDecisionSig: string | null = null;
 
   const broadcast = (event: string, data: unknown): void => {
     const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -58,13 +58,14 @@ export function createSseHub(deps: SseHubDeps): SseHub {
         /* transient — clients keep their last value / polling fallback */
       }
     }
-    // Nudge clients to refetch the decision log when it grows (small capped file).
+    // Nudge clients to refetch the decision log when it changes. stat, not parse: the log
+    // is uncapped (grows ~1 MB/month) and this runs every 3s. Counting entries also broke
+    // once the old 100-cap filled up — the count never changed again, so no event fired.
     try {
-      const raw = await readFile(path.join(deps.stateDir, "decision-log.json"), "utf8");
-      const dl = JSON.parse(raw) as { decisions?: unknown[] };
-      const count = Array.isArray(dl?.decisions) ? dl.decisions.length : 0;
-      if (lastDecisionCount >= 0 && count !== lastDecisionCount) broadcast("decision", { count });
-      lastDecisionCount = count;
+      const st = await stat(path.join(deps.stateDir, "decision-log.json"));
+      const sig = `${st.size}:${st.mtimeMs}`;
+      if (lastDecisionSig !== null && sig !== lastDecisionSig) broadcast("decision", { changed: true });
+      lastDecisionSig = sig;
     } catch {
       /* file may not exist yet */
     }
@@ -81,7 +82,7 @@ export function createSseHub(deps: SseHubDeps): SseHub {
       if (subs.size === 0 && timer) {
         clearInterval(timer);
         timer = null;
-        lastDecisionCount = -1;
+        lastDecisionSig = null;
       }
     },
   };

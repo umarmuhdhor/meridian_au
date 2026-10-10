@@ -44,3 +44,15 @@ describe("generateOpenAiToolSchemas", () => {
     expect(params.$defs).toBeUndefined();
   });
 });
+
+describe("generateOpenAiToolSchemas — exclusive bounds", () => {
+  it("emits numeric exclusiveMinimum, never the OpenAPI 3.0 boolean form", () => {
+    const [schema] = generateOpenAiToolSchemas(createRegistry([tool]));
+    const limit = (schema?.function.parameters as { properties: Record<string, Record<string, unknown>> })
+      .properties.limit;
+    expect(limit?.exclusiveMinimum).toBe(0);
+    expect(limit).not.toHaveProperty("minimum");
+    expect(limit?.maximum).toBe(100);
+    expect(JSON.stringify(schema)).not.toContain('"exclusiveMinimum":true');
+  });
+});

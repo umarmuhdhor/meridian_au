@@ -267,6 +267,7 @@ describe("parseRetrospective", () => {
       entry: null,
       exit: null,
       rule: null,
+      match: null,
     });
   });
 });

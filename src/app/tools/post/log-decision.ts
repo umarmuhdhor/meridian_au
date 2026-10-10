@@ -20,13 +20,17 @@ export function logDeployDecision(defaultActor: DecisionActor): PostHook<{
   amount_sol: number;
   strategy: string;
   bin_step?: number | undefined;
+  reason?: string | undefined;
+  lessons_applied?: string[] | undefined;
 }, DeployResult> {
   return async (args, result, ctx) => {
     if (!result.success) return;
-    // Per-call actor + rationale from the caller (screening cycle / bridge).
+    // Per-call actor + rationale from the caller (screening cycle / bridge), else the
+    // `reason` the LLM passed to deploy_position itself.
     // Falls back to the registered default (SCREENER) only when unset.
     const actor = ctx.deployMeta?.actor ?? defaultActor;
-    const callerRationale = ctx.deployMeta?.rationale?.trim() || null;
+    const callerRationale = ctx.deployMeta?.rationale?.trim() || args.reason?.trim() || null;
+    const lessonsApplied = args.lessons_applied?.filter(Boolean) ?? [];
     // Enrich pool_name from the tracked position when the caller (typically Sage
     // via mrd_deploy_position) forgot to include it — trackDeployedPosition runs
     // BEFORE this hook, so state.json already has the record for this position.
@@ -62,6 +66,7 @@ export function logDeployDecision(defaultActor: DecisionActor): PostHook<{
         lower_bin: result.lower_bin,
         upper_bin: result.upper_bin,
         ...(input.bin_step != null ? { bin_step: input.bin_step } : {}),
+        ...(lessonsApplied.length ? { lessons_applied: lessonsApplied } : {}),
       },
       rejected: [],
     });

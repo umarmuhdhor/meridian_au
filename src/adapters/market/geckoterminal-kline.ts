@@ -98,9 +98,16 @@ export function createGeckoTerminalKlineClient(opts: GeckoTerminalKlineOptions):
 
   const isFresh = (e: CacheEntry): boolean => clock.now().getTime() - e.fetchedAt < ttlMs;
 
-  async function fetchOnce(pool: string, tf: KlineTimeframe, limit: number): Promise<KlineCandle[]> {
+  async function fetchOnce(
+    pool: string,
+    tf: KlineTimeframe,
+    limit: number,
+    currency: "usd" | "token",
+    beforeTs: number | undefined,
+  ): Promise<KlineCandle[]> {
     const { path, aggregate } = mapTimeframe(tf);
-    const url = `${baseUrl}/networks/${network}/pools/${pool}/ohlcv/${path}?aggregate=${aggregate}&limit=${limit}&currency=usd`;
+    const before = beforeTs !== undefined ? `&before_timestamp=${Math.floor(beforeTs)}` : "";
+    const url = `${baseUrl}/networks/${network}/pools/${pool}/ohlcv/${path}?aggregate=${aggregate}&limit=${limit}&currency=${currency}${before}`;
     const controller = new AbortController();
     const to = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -135,14 +142,15 @@ export function createGeckoTerminalKlineClient(opts: GeckoTerminalKlineOptions):
       o: KlineFetchOptions = {},
     ): Promise<KlineCandle[]> {
       const limit = Math.max(1, Math.min(1000, o.limit ?? DEFAULT_LIMIT));
-      const key = `${poolAddress}|${timeframe}|${limit}`;
+      const currency = o.currency ?? "usd";
+      const key = `${poolAddress}|${timeframe}|${limit}|${currency}|${o.beforeTs ?? ""}`;
       if (!o.force) {
         const hit = cache.get(key);
         if (hit && isFresh(hit)) return hit.value;
         const pending = inflight.get(key);
         if (pending) return pending;
       }
-      const p = fetchOnce(poolAddress, timeframe, limit).then((value) => {
+      const p = fetchOnce(poolAddress, timeframe, limit, currency, o.beforeTs).then((value) => {
         cache.set(key, { value, fetchedAt: clock.now().getTime() });
         inflight.delete(key);
         return value;

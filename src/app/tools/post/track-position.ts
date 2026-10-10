@@ -28,6 +28,8 @@ export function trackDeployedPosition(): PostHook<
     mcap?: number | undefined;
     holders?: number | undefined;
     smart_wallets_present?: boolean | undefined;
+    reason?: string | undefined;
+    lessons_applied?: string[] | undefined;
   },
   DeployResult
 > {
@@ -82,7 +84,7 @@ export function trackDeployedPosition(): PostHook<
       amount_sol: result.amount_sol,
       amount_x: 0, // single-side SOL deploys only
       active_bin_at_deploy: result.active_bin,
-      bin_step: args.bin_step ?? null,
+      bin_step: args.bin_step ?? result.bin_step ?? null,
       volatility: args.volatility ?? null,
       fee_tvl_ratio: args.fee_tvl_ratio ?? null,
       initial_fee_tvl_24h: args.fee_tvl_ratio ?? null,
@@ -92,6 +94,8 @@ export function trackDeployedPosition(): PostHook<
       holders_at_entry: args.holders ?? null,
       smart_wallets_present: args.smart_wallets_present ?? null,
       entry_technicals: entryTechnicals,
+      entry_reason: args.reason?.trim() || ctx.deployMeta?.rationale?.trim() || null,
+      lessons_applied: args.lessons_applied?.length ? args.lessons_applied : null,
       deployed_at: now,
       out_of_range_since: null,
       last_claim_at: null,

@@ -34,6 +34,11 @@ export const mgmt: ManagementConfig = {
   healthyFeeVelocityMin: 12,
   sageExitEnabled: false,
   sageExitCooldownMin: 20,
+  bounceExitEnabled: false,
+  bounceTakePct: 15,
+  bounceStopPct: 25,
+  bounceTimeoutMin: 360,
+  closeReviewEnabled: true,
 };
 
 // Threshold values here mirror the former inline `defaultThresholds` constants so

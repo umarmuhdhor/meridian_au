@@ -5,6 +5,8 @@ import type { ToolRegistry } from "../tools/registry.js";
 import { runAgentLoop, type AgentLoopResult } from "../agent/loop.js";
 import { executeTool } from "../tools/execute.js";
 import { buildSystemPrompt } from "../../domain/prompt/builder.js";
+import { formatLessonsBlock, selectPromptLessons, splitMatchedLessons } from "../../domain/prompt/lessons.js";
+import { candidateAsRecord, lessonsForCandidate } from "../../domain/rules/lesson-match.js";
 import { SCREENER_TOOLS } from "../../domain/prompt/role-tools.js";
 import { sanitizeDecisionText } from "../../domain/schemas/decision.js";
 import type { CandidatePool } from "../../domain/schemas/market.js";
@@ -19,7 +21,7 @@ import {
   formatCandidateHistoryLine,
   formatPortfolioAggregate,
 } from "../../domain/format/candidate-history.js";
-import type { PerformanceRecord } from "../../domain/schemas/lesson.js";
+import type { Lesson, PerformanceRecord } from "../../domain/schemas/lesson.js";
 import { computeTechnicals, formatTechnicalsBlock } from "../../domain/format/technicals.js";
 import type { KlineTimeframe, TechnicalsSummary } from "../../domain/schemas/kline.js";
 
@@ -196,14 +198,46 @@ async function enrichCandidates(
   );
 }
 
+/**
+ * How the decider must read a candidate's `lessons:` line. Auto lessons are narrow by
+ * construction (MATCH-backtested); the whole point is that they do NOT spill over onto
+ * coins they were never about.
+ */
+const LESSON_LINE_GUIDE =
+  "Auto-learned lessons are pre-matched in code: a candidate's `lessons:` line lists the ones whose exact entry " +
+  "conditions hold for THAT candidate. Weigh each only for the candidate it is listed under — never extend it to " +
+  "other candidates or to similar-looking coins. A candidate with no matching lesson is not penalised by them. " +
+  "If you deploy despite a ⚠ AVOID lesson, say why in `reason` and include its id in `lessons_applied`.";
+
 function formatCandidatesBlock(
   picked: TopCandidatesResult["picked"],
   diligence?: readonly Diligence[],
   performance?: readonly PerformanceRecord[],
   now?: Date,
   technicals?: readonly CandidateTechnicals[],
+  matchedLessons?: readonly Lesson[],
 ): string {
   if (!picked.length) return "  (no candidates passed)";
+  const lessonLine = (p: TopCandidatesResult["picked"][number], i: number): string => {
+    if (!matchedLessons?.length) return "";
+    const entry = candidateAsRecord({
+      fee_tvl_ratio: p.pool.fee_active_tvl_ratio ?? p.pool.fee_tvl_ratio ?? null,
+      volatility: p.pool.volatility ?? null,
+      organic_score: p.pool.organic_score ?? null,
+      mcap: p.pool.mcap ?? null,
+      holders: p.pool.holders ?? null,
+      bin_step: p.pool.bin_step ?? null,
+      technicals: technicals?.[i] ?? null,
+    });
+    const hits = lessonsForCandidate(matchedLessons, entry);
+    if (!hits.length) return `\n       lessons:   none of the ${matchedLessons.length} condition-matched lessons apply to this candidate`;
+    return hits
+      .map(
+        (h, k) =>
+          `\n       ${k === 0 ? "lessons:  " : "          "} ⚠ [${h.lesson.id}]${h.strategy ? ` (only if you choose ${h.strategy})` : ""} ${h.lesson.rule}`,
+      )
+      .join("");
+  };
   const perfHistory = performance ?? [];
   const clock = now ?? new Date();
   return picked
@@ -216,7 +250,7 @@ function formatCandidatesBlock(
       const volSig = p.pool.volatility != null ? ` volatility=${p.pool.volatility.toFixed(3)}` : "";
       const base = `  [${i + 1}] ${p.pool.name}  pool=${p.pool.pool_address}  score=${p.score.toFixed(0)}  fee/aTVL=${(feeTvl * 100).toFixed(2)}% (fee_tvl_ratio=${feeTvl.toFixed(4)})  vol=$${vol.toFixed(0)}  organic=${p.pool.organic_score ?? "?"}${mcap}${holders}${binStep}${volSig}`;
       const d = diligence?.[i];
-      if (!d) return base;
+      if (!d) return base + lessonLine(p, i);
       const parts: string[] = [];
       if (d.rug) {
         parts.push(
@@ -242,7 +276,7 @@ function formatCandidatesBlock(
       const dilLine = parts.length ? `\n       diligence: ${parts.join("  ")}` : "";
       const histLine = historyLine ? `\n       history:   ${historyLine}` : "";
       const techLine = techBlock ? `\n       technicals: ${techBlock}` : "";
-      return `${base}${dilLine}${histLine}${techLine}`;
+      return `${base}${dilLine}${histLine}${techLine}${lessonLine(p, i)}`;
     })
     .join("\n");
 }
@@ -271,8 +305,12 @@ export async function runScreeningCycle(deps: ScreeningCycleDeps): Promise<Scree
       // Pinned + recent lessons feed the LESSONS block — both for the local loop's
       // buildSystemPrompt and (below) for the Sage system prompt, which previously
       // never received them.
-      ctx.repos.lessons.listLessons({ limit: 20 }),
+      // ALL lessons — selectPromptLessons keeps every pinned one plus the newest unpinned.
+      // A `limit` here used to cut the oldest lessons before pinned-ness was considered.
+      ctx.repos.lessons.listLessons(),
     ]);
+  // Condition-matched auto lessons go on the candidates they match, not in LESSONS.
+  const { general: generalLessons, matched: matchedLessons } = splitMatchedLessons(lessons);
 
   if (positionsSnap.total_positions >= ctx.config.risk.maxPositions) {
     // Name the follow feature when it is the reason the screener is boxed out.
@@ -401,7 +439,12 @@ export async function runScreeningCycle(deps: ScreeningCycleDeps): Promise<Scree
     activeStrategy,
     recentDecisions,
     recentPerformance,
-    lessons,
+    lessons: generalLessons,
+  });
+  const promptLessons = selectPromptLessons(generalLessons);
+  ctx.logger.info("screening", "lessons in prompt", {
+    pinned: promptLessons.pinned.map((l) => l.id),
+    recent: promptLessons.recent.map((l) => l.id),
   });
 
   // Pre-fetch fresh diligence (rug + holder concentration) for the shortlist so
@@ -622,12 +665,14 @@ export async function runScreeningCycle(deps: ScreeningCycleDeps): Promise<Scree
     "SCREENING CYCLE — pick one of the following candidates and call deploy_position, or explain why none qualify.",
     "",
     "CANDIDATES (fresh diligence + prior history included — do NOT fetch more):",
-    formatCandidatesBlock(pickedFiltered, diligence, recentPerformance, clockNow, technicals),
+    formatCandidatesBlock(pickedFiltered, diligence, recentPerformance, clockNow, technicals, matchedLessons),
     "",
     portfolioBlock,
     "",
     `Deploy amount: ${ctx.config.management.deployAmountSol} SOL.`,
-    `Strategy: choose per candidate {spot|curve|bid_ask} — spot for high-vol meme coins, curve for low-vol range-bound, bid_ask ONLY with a declared directional thesis. Config default "${ctx.config.strategy.strategy}" is a hint, not an order.`,
+    `Strategy: choose per candidate {spot|bid_ask} — spot is the default (including low-vol, range-bound tokens), bid_ask ONLY with a declared directional thesis. curve is FORBIDDEN (user mandate 2026-09-25). Config default "${ctx.config.strategy.strategy}" is a hint, not an order.`,
+    "When you deploy, pass `reason` and `lessons_applied` (the lesson [ids] from the LESSONS block or a candidate's `lessons:` line that shaped the decision).",
+    LESSON_LINE_GUIDE,
     `bins_below: ${ctx.config.strategy.binsBelow}.`,
   ].join("\n");
 
@@ -733,13 +778,12 @@ export async function runScreeningCycle(deps: ScreeningCycleDeps): Promise<Scree
       "volatility, fee_tvl_ratio, organic_score, bin_step (all present on the candidate).",
       "Omit any field that is truly unknown — do not fabricate.",
       "",
-      "STRATEGY SELECTION — MANDATORY per cycle. Pick from {spot, curve, bid_ask} based on the",
+      "STRATEGY SELECTION — MANDATORY per cycle. Pick from {spot, bid_ask} based on the",
       "candidate's volatility and thesis. Never copy the config default blindly.",
-      "  - spot  → high volatility (>3), uncertain direction, most meme coins. Uniform",
-      "            distribution stays in range longest when price swings both ways. DEFAULT",
-      "            choice for meme coins.",
-      "  - curve → range-bound, low volatility (<2), stable pairs. Concentrates at center for",
-      "            max fee efficiency when price barely moves.",
+      "  - spot  → the DEFAULT. Uniform distribution stays in range longest when price swings",
+      "            both ways — right for most meme coins, including low-volatility ones.",
+      "  - curve → FORBIDDEN (user mandate 2026-09-25). Never deploy curve under any",
+      "            condition, whatever an older lesson or your memory says.",
       "  - bid_ask → ONLY with an explicit directional thesis. TWO valid theses: (1) dumping /",
       "              DCA-out / price expected to decline; (2) REVERSAL SETUP — downtrend",
       "              approaching support (support_distance_pct < 5%) with high vol (atr_pct > 20%),",
@@ -776,28 +820,21 @@ export async function runScreeningCycle(deps: ScreeningCycleDeps): Promise<Scree
     // buildSystemPrompt. Injected here because sageSystemPrompt is hand-written and
     // previously carried zero lesson context, so anything the user (or a past
     // Telegram retrospective) pinned was invisible to Sage.
-    const sagePinned = lessons.filter((l) => l.pinned).slice(0, 5);
-    const sageRecent = lessons.filter((l) => !l.pinned).slice(-5);
-    const lessonsParts: string[] = [];
-    if (sagePinned.length)
-      lessonsParts.push(`PINNED: ${sagePinned.map((l) => l.rule).join(" | ")}`);
-    if (sageRecent.length)
-      lessonsParts.push(`RECENT: ${sageRecent.map((l) => l.rule).join(" | ")}`);
-    const sageLessonsBlock = lessonsParts.length
-      ? `\n\n── LESSONS ──\n${lessonsParts.join("\n")}`
-      : "";
+    const sageLessonsText = formatLessonsBlock(selectPromptLessons(generalLessons));
+    const sageLessonsBlock = sageLessonsText ? `\n\n── LESSONS ──\n${sageLessonsText}` : "";
     const sageSystemPromptWithLessons = sageSystemPrompt + sageLessonsBlock;
 
     const sageGoal = [
       "SCREENING CYCLE — choose one candidate and call mrd_deploy_position, or NO DEPLOY.",
       "",
       "CANDIDATES (fresh diligence + prior history included — do NOT fetch more):",
-      formatCandidatesBlock(pickedFiltered, diligence, recentPerformance, clockNow, technicals),
+      formatCandidatesBlock(pickedFiltered, diligence, recentPerformance, clockNow, technicals, matchedLessons),
       "",
       portfolioBlock,
       "",
+      LESSON_LINE_GUIDE,
       `amount_sol: ${ctx.config.management.deployAmountSol}. bins_below: ${ctx.config.strategy.binsBelow}. bins_above: 0.`,
-      `strategy: CHOOSE per candidate (spot | curve | bid_ask). Config default is "${ctx.config.strategy.strategy}" — treat as a hint only. Justify the choice from the candidate's volatility before deploying. Default for meme coins is spot; use bid_ask only with a declared directional thesis.`,
+      `strategy: CHOOSE per candidate (spot | bid_ask) — curve is FORBIDDEN. Config default is "${ctx.config.strategy.strategy}" — treat as a hint only. Justify the choice from the candidate's volatility before deploying. Default is spot; use bid_ask only with a declared directional thesis.`,
     ].join("\n");
     try {
       const result = await deps.sage.decide({

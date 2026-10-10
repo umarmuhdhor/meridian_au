@@ -26,6 +26,8 @@ export interface FollowCycleDeps {
   /** Optional — enables the post-close retrospective. */
   llm?: LLMClient | undefined;
   model?: string | undefined;
+  /** Per-close learning model (llm.learningModel / learningImportantModel), read at call time. */
+  learningModelFor?: ((pnlPct: number) => string) | undefined;
   /**
    * Consecutive degraded-snapshot count per wallet, owned by the caller so it survives
    * across ticks. Absent → the stale-snapshot alert is skipped.
@@ -783,7 +785,7 @@ async function mirrorClose(
 
   if (ctx.config.follow.learnEnabled) {
     const outcome = await runFollowRetrospective(
-      { ctx, llm: deps.llm, model: deps.model },
+      { ctx, llm: deps.llm, model: deps.model, modelFor: deps.learningModelFor },
       finalRecord,
       ourPnl,
     );

@@ -25,6 +25,10 @@ const ArgsSchema = z.object({
   mcap: z.number().optional(),
   holders: z.number().int().nonnegative().optional(),
   smart_wallets_present: z.boolean().optional(),
+  /** Why this pool + strategy, in the screener's words. Recorded for the close review. */
+  reason: z.string().max(600).optional(),
+  /** Ids of the lessons that shaped this deploy. Scored against the outcome after close. */
+  lessons_applied: z.array(z.string()).max(30).optional(),
 });
 
 /**

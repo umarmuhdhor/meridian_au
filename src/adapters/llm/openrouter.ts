@@ -53,10 +53,12 @@ export function createOpenRouterLLMClient(opts: OpenRouterOptions): LLMClient {
         const first = response.choices?.[0];
         if (first) {
           const msg = first.message;
-          const toolCalls: ToolCallRequest[] = (msg.tool_calls ?? []).flatMap((tc) => {
-            if (tc.type !== "function") return [];
-            return [{ id: tc.id, name: tc.function.name, arguments: tc.function.arguments ?? "" }];
-          });
+          const toolCalls = mergeToolCallFragments(
+            (msg.tool_calls ?? []).flatMap((tc) => {
+              if (tc.type !== "function") return [];
+              return [{ id: tc.id ?? "", name: tc.function.name ?? "", arguments: tc.function.arguments ?? "" }];
+            }),
+          );
           return {
             text: msg.content ?? null,
             tool_calls: toolCalls,
@@ -88,6 +90,25 @@ export function createOpenRouterLLMClient(opts: OpenRouterOptions): LLMClient {
       throw new Error(`LLM returned no choices — ${lastDetail}`);
     },
   };
+}
+
+/**
+ * Some OpenAI-compatible proxies (BandelAI, 2026-10-05) aggregate a streamed upstream reply
+ * without merging the deltas, so one call arrives as N entries: the first carries id + name,
+ * the rest have no id/name and hold successive argument chunks. Re-join them; a fragment with
+ * neither id nor name continues the previous call. Well-formed responses pass through as-is.
+ */
+export function mergeToolCallFragments(calls: readonly ToolCallRequest[]): ToolCallRequest[] {
+  const merged: ToolCallRequest[] = [];
+  for (const c of calls) {
+    const last = merged[merged.length - 1];
+    if (last && !c.id && !c.name) {
+      last.arguments += c.arguments;
+      continue;
+    }
+    merged.push({ ...c });
+  }
+  return merged.filter((c) => c.name);
 }
 
 type OpenAiMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam;

@@ -102,6 +102,39 @@ describe("deploy_position — safety chain + post-hooks", () => {
     expect(tracked[0]?.closed).toBe(false);
   });
 
+  it("carries reason + lessons_applied from deploy through to the performance record", async () => {
+    const { ctx, decisions } = fullyMemCtx({ walletSol: 5 });
+    const registry = createRegistry([deployPositionTool, closePositionTool]);
+    const r = await executeTool(registry, {
+      name: "deploy_position",
+      args: {
+        pool_address: "poolA",
+        amount_sol: 0.5,
+        strategy: "spot",
+        bins_below: 40,
+        pool_name: "TKN/SOL",
+        reason: "fee/tvl 0.12 sideways chop, spot for two-way swings",
+        lessons_applied: ["l-1", "l-2"],
+      },
+    }, ctx);
+    expect(r.ok).toBe(true);
+    const [dec] = await decisions.recent(1);
+    expect(dec?.reason).toBe("fee/tvl 0.12 sideways chop, spot for two-way swings");
+    expect(dec?.metrics.lessons_applied).toEqual(["l-1", "l-2"]);
+
+    const [tracked] = await ctx.repos.positions.all();
+    expect(tracked?.lessons_applied).toEqual(["l-1", "l-2"]);
+
+    const c = await executeTool(registry, {
+      name: "close_position",
+      args: { position_address: tracked!.position, reason: "take profit" },
+    }, ctx);
+    expect(c.ok).toBe(true);
+    const [rec] = await ctx.repos.lessons.recentPerformance(1);
+    expect(rec?.entry_reason).toBe("fee/tvl 0.12 sideways chop, spot for two-way swings");
+    expect(rec?.lessons_applied).toEqual(["l-1", "l-2"]);
+  });
+
   it("blocked by pool cooldown → no notify, no decision, no wallet change", async () => {
     const { ctx, notifier, decisions, chain } = fullyMemCtx({
       walletSol: 5,

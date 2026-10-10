@@ -160,6 +160,8 @@ export const PerformanceRecordSchema = z
     /** Market-cap snapshot at deploy time and at close time — for the "mcap in → out" column. */
     entry_mcap: z.number().nullable().optional(),
     exit_mcap: z.number().nullable().optional(),
+    /** Pool TVL (USD) at deploy time. Absent on records written before 2026-10-10. */
+    entry_tvl: z.number().nullable().optional(),
     /** Base-mint (SPL token) address — persisted so same-token history matches across pools. */
     base_mint: z.string().nullable().optional(),
     /** Base-mint context captured at deploy for later diagnostics. */

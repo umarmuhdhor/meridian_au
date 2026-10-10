@@ -124,6 +124,7 @@ export const recordPerformanceHook: PostHook<
     ...(tracked?.fee_tvl_ratio != null ? { fee_tvl_ratio: tracked.fee_tvl_ratio } : {}),
     ...(tracked?.organic_score != null ? { organic_score: tracked.organic_score } : {}),
     ...(tracked?.entry_mcap != null ? { entry_mcap: tracked.entry_mcap } : {}),
+    ...(tracked?.entry_tvl != null ? { entry_tvl: tracked.entry_tvl } : {}),
     ...(exitMcap != null ? { exit_mcap: exitMcap } : {}),
     ...(baseMint ? { base_mint: baseMint } : {}),
     ...(tracked?.entry_technicals ? { entry_technicals: tracked.entry_technicals } : {}),

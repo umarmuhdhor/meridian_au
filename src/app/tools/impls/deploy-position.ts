@@ -23,6 +23,8 @@ const ArgsSchema = z.object({
   fee_tvl_ratio: z.number().optional(),
   organic_score: z.number().optional(),
   mcap: z.number().optional(),
+  /** Pool TVL (USD) from the candidate line — recorded for lesson MATCH backtests. */
+  tvl: z.number().nonnegative().optional(),
   holders: z.number().int().nonnegative().optional(),
   smart_wallets_present: z.boolean().optional(),
   /** Why this pool + strategy, in the screener's words. Recorded for the close review. */

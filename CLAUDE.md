@@ -536,6 +536,25 @@ bar) and `delta_pct` vs the real sale. Observation only; read it before arming.
      `npx tsx src/entrypoints/backtest-strategy.ts --out report.json` (read-only). The deploy
      write path now records the pool's real `bin_step` (from the SDK `lbPair`) when the LLM
      omits it — before, those records had none and could not be replayed.
+   - **Community backup lessons (2026-10-10, `domain/rules/community-lessons.ts`)** — lessons
+     other operators' bots learned, scraped from the Meridian Telegram group
+     (`scripts/tg-scrape/scrape.py`, read-only Telethon user client; output + session under
+     the gitignored `/data/`) and curated into `data/tg-scrape/community-lessons.json`
+     (every group lesson with status backup / covered / rejected and why). Only `backup`
+     entries are imported (`src/entrypoints/import-community-lessons.ts`, dry-run default,
+     `--write`), as `sourceType:"community"`, unpinned. Our own lessons always win:
+     community lessons never take a PINNED/RECENT slot or a candidate's `lessons:` line
+     (`selectPromptLessons` / `splitMatchedLessons` drop them); a MATCH one shows as a
+     `backup:` line ONLY on a candidate no own MATCH lesson covers; MATCH-less ones go in a
+     `── COMMUNITY BACKUP ──` block (local loop + Sage). Each screening cycle judges them
+     against ALL our closed trades and withholds the contradicted ones: by the track record
+     of deploys that cited them (≥3), or — with a MATCH, ≥8 of our trades in the bucket — by
+     whether that bucket did worse (caution) / better (PREFER) than our average. That is a
+     base-rate test, deliberately looser than `acceptBacktest`: these are "2× the risk"
+     cautions whose bucket still mostly wins. Pinning one promotes it to an own lesson.
+     Re-importing keeps earned `stats` and removes unlisted unpinned community lessons.
+     Entry TVL is now recorded (`deploy_position.tvl` → `entry_tvl`, MATCH field `tvl`) so
+     the TVL caution can be judged; records before 2026-10-10 have none (never match).
    - Reviewer budget is 8000 tokens: glm-5.3 thinks 1–6k tokens first. At the old 400 every
      reply was cut to `"WHAT"` and silently recorded as LESSON: NONE (29 Sep–7 Oct). A
      truncated/shapeless reply now counts as a failed call and is retried. One-off repair
@@ -709,7 +728,7 @@ retry-on-failure, and a hand-edited config then drains identically.
 |---|---|---|
 | `state.json` | position-repo | tracked positions (+`entry_technicals` since 2026-08-10, +`last_sage_exit_escalation_at` since 2026-08-29, +`bounce_watch` since 2026-10-10) + recent-events ring (capped 20) |
 | `pool-memory.json` | pool-memory-repo | per-pool deploy history, win rates, cooldowns |
-| `lessons.json` | lesson-repo | lessons (+`stats` W/L track record) + performance records (PerformanceRecord now carries `base_mint`, `entry_technicals`, `exit_technicals`, `pnl_source`, `entry_reason`, `lessons_applied`, `review`, `shadow`, `bounce_shadow`) |
+| `lessons.json` | lesson-repo | lessons (+`stats` W/L track record; `sourceType:"community"` = backup lessons from other operators) + performance records (PerformanceRecord now carries `base_mint`, `entry_technicals`, `exit_technicals`, `pnl_source`, `entry_reason`, `lessons_applied`, `review`, `shadow`, `bounce_shadow`) |
 | `decision-log.json` | decision-log | every decision, newest first (deploy/close/skip/no_deploy/note). **Uncapped since 2026-09-29** — the old 100-entry ring lost deploy reasons within a day. Readers must not parse it on a hot path (the SSE hub `stat`s it) and UIs must paginate (`DecisionTimeline` renders 100 at a time + search) |
 | `strategy-library.json` | strategy-repo | saved strategies + active pointer |
 | `smart-wallets.json` | smart-wallet-repo | tracked KOL/alpha wallets (type lp\|holder) |

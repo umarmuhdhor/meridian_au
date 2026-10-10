@@ -59,3 +59,10 @@ coverage/
 
 # Feed seed berisi lesson/strategi milik operator (edge dagang). Repo ini publik.
 deploy/homeserver/feed-seed.local.json
+
+# Telegram group scrape (scripts/tg-scrape): other people's messages, plus a
+# session file that is a full login to the operator's Telegram account.
+/data/
+scripts/tg-scrape/.venv/
+*.session
+*.session-journal

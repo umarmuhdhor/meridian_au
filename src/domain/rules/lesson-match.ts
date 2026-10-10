@@ -33,6 +33,7 @@ const POOL_FIELDS: Record<string, (p: PerformanceRecord) => number | string | nu
   volatility: (p) => p.volatility,
   organic: (p) => p.organic_score,
   mcap: (p) => p.entry_mcap,
+  tvl: (p) => p.entry_tvl,
   holders: (p) => p.holders_at_entry,
   bin_step: (p) => p.bin_step,
   strategy: (p) => p.strategy,
@@ -191,6 +192,7 @@ export interface CandidateEntry {
   volatility?: number | null;
   organic_score?: number | null;
   mcap?: number | null;
+  tvl?: number | null;
   holders?: number | null;
   bin_step?: number | null;
   technicals?: readonly TechnicalsSummary[] | null;
@@ -205,6 +207,7 @@ export function candidateAsRecord(c: CandidateEntry): PerformanceRecord {
     volatility: c.volatility ?? null,
     organic_score: c.organic_score ?? null,
     entry_mcap: c.mcap ?? null,
+    entry_tvl: c.tvl ?? null,
     holders_at_entry: c.holders ?? null,
     bin_step: c.bin_step ?? null,
     entry_technicals: [...(c.technicals ?? [])],

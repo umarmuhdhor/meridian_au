@@ -5,8 +5,14 @@ import type { ToolRegistry } from "../tools/registry.js";
 import { runAgentLoop, type AgentLoopResult } from "../agent/loop.js";
 import { executeTool } from "../tools/execute.js";
 import { buildSystemPrompt } from "../../domain/prompt/builder.js";
-import { formatLessonsBlock, selectPromptLessons, splitMatchedLessons } from "../../domain/prompt/lessons.js";
+import {
+  formatCommunityBlock,
+  formatLessonsBlock,
+  selectPromptLessons,
+  splitMatchedLessons,
+} from "../../domain/prompt/lessons.js";
 import { candidateAsRecord, lessonsForCandidate } from "../../domain/rules/lesson-match.js";
+import { type CommunityVerdict, selectCommunityLessons } from "../../domain/rules/community-lessons.js";
 import { SCREENER_TOOLS } from "../../domain/prompt/role-tools.js";
 import { sanitizeDecisionText } from "../../domain/schemas/decision.js";
 import type { CandidatePool } from "../../domain/schemas/market.js";
@@ -207,7 +213,9 @@ const LESSON_LINE_GUIDE =
   "Auto-learned lessons are pre-matched in code: a candidate's `lessons:` line lists the ones whose exact entry " +
   "conditions hold for THAT candidate. Weigh each only for the candidate it is listed under — never extend it to " +
   "other candidates or to similar-looking coins. A candidate with no matching lesson is not penalised by them. " +
-  "If you deploy despite a ⚠ AVOID lesson, say why in `reason` and include its id in `lessons_applied`.";
+  "If you deploy despite a ⚠ AVOID lesson, say why in `reason` and include its id in `lessons_applied`. " +
+  "A `backup:` line appears only on a candidate none of our own lessons cover: it is a community lesson from " +
+  "other operators' bots, weaker than our own evidence — let it tip a close call, never decide one alone.";
 
 function formatCandidatesBlock(
   picked: TopCandidatesResult["picked"],
@@ -216,27 +224,45 @@ function formatCandidatesBlock(
   now?: Date,
   technicals?: readonly CandidateTechnicals[],
   matchedLessons?: readonly Lesson[],
+  communityMatched?: readonly CommunityVerdict[],
 ): string {
   if (!picked.length) return "  (no candidates passed)";
   const lessonLine = (p: TopCandidatesResult["picked"][number], i: number): string => {
-    if (!matchedLessons?.length) return "";
+    if (!matchedLessons?.length && !communityMatched?.length) return "";
     const entry = candidateAsRecord({
       fee_tvl_ratio: p.pool.fee_active_tvl_ratio ?? p.pool.fee_tvl_ratio ?? null,
       volatility: p.pool.volatility ?? null,
       organic_score: p.pool.organic_score ?? null,
       mcap: p.pool.mcap ?? null,
+      tvl: p.pool.tvl,
       holders: p.pool.holders ?? null,
       bin_step: p.pool.bin_step ?? null,
       technicals: technicals?.[i] ?? null,
     });
-    const hits = lessonsForCandidate(matchedLessons, entry);
-    if (!hits.length) return `\n       lessons:   none of the ${matchedLessons.length} condition-matched lessons apply to this candidate`;
-    return hits
-      .map(
-        (h, k) =>
-          `\n       ${k === 0 ? "lessons:  " : "          "} ⚠ [${h.lesson.id}]${h.strategy ? ` (only if you choose ${h.strategy})` : ""} ${h.lesson.rule}`,
-      )
-      .join("");
+    const hits = matchedLessons?.length ? lessonsForCandidate(matchedLessons, entry) : [];
+    if (hits.length) {
+      return hits
+        .map(
+          (h, k) =>
+            `\n       ${k === 0 ? "lessons:  " : "          "} ⚠ [${h.lesson.id}]${h.strategy ? ` (only if you choose ${h.strategy})` : ""} ${h.lesson.rule}`,
+        )
+        .join("");
+    }
+    const none = matchedLessons?.length
+      ? `\n       lessons:   none of the ${matchedLessons.length} condition-matched lessons apply to this candidate`
+      : "";
+    // Our own lessons are silent on this candidate — only now may the community backup speak.
+    const verdictOf = new Map(communityMatched?.map((v) => [v.lesson.id, v]) ?? []);
+    const backup = communityMatched?.length ? lessonsForCandidate(communityMatched.map((v) => v.lesson), entry) : [];
+    return (
+      none +
+      backup
+        .map(
+          (h, k) =>
+            `\n       ${k === 0 ? "backup:   " : "          "} ↳ [${h.lesson.id}]${h.strategy ? ` (only if you choose ${h.strategy})` : ""} ${h.lesson.rule}  (${verdictOf.get(h.lesson.id)?.own ?? "our data: untested"})`,
+        )
+        .join("")
+    );
   };
   const perfHistory = performance ?? [];
   const clock = now ?? new Date();
@@ -245,10 +271,11 @@ function formatCandidatesBlock(
       const feeTvl = p.pool.fee_active_tvl_ratio ?? p.pool.fee_tvl_ratio ?? 0;
       const vol = p.pool.volume_window;
       const mcap = p.pool.mcap != null ? ` mcap=$${p.pool.mcap.toFixed(0)}` : "";
+      const tvl = ` tvl=$${p.pool.tvl.toFixed(0)}`;
       const holders = p.pool.holders != null ? ` holders=${p.pool.holders}` : "";
       const binStep = p.pool.bin_step != null ? ` bin_step=${p.pool.bin_step}` : "";
       const volSig = p.pool.volatility != null ? ` volatility=${p.pool.volatility.toFixed(3)}` : "";
-      const base = `  [${i + 1}] ${p.pool.name}  pool=${p.pool.pool_address}  score=${p.score.toFixed(0)}  fee/aTVL=${(feeTvl * 100).toFixed(2)}% (fee_tvl_ratio=${feeTvl.toFixed(4)})  vol=$${vol.toFixed(0)}  organic=${p.pool.organic_score ?? "?"}${mcap}${holders}${binStep}${volSig}`;
+      const base = `  [${i + 1}] ${p.pool.name}  pool=${p.pool.pool_address}  score=${p.score.toFixed(0)}  fee/aTVL=${(feeTvl * 100).toFixed(2)}% (fee_tvl_ratio=${feeTvl.toFixed(4)})  vol=$${vol.toFixed(0)}  organic=${p.pool.organic_score ?? "?"}${mcap}${tvl}${holders}${binStep}${volSig}`;
       const d = diligence?.[i];
       if (!d) return base + lessonLine(p, i);
       const parts: string[] = [];
@@ -292,7 +319,7 @@ export async function runScreeningCycle(deps: ScreeningCycleDeps): Promise<Scree
   const { ctx, llm, registry, model } = deps;
 
   // Preflight
-  const [wallet, positionsSnap, activeStrategy, recentDecisions, recentPerformance, lessons] =
+  const [wallet, positionsSnap, activeStrategy, recentDecisions, recentPerformance, lessons, ownHistory] =
     await Promise.all([
       ctx.chain.getWalletBalance(),
       ctx.chain.getMyPositions({ force: true }),
@@ -308,9 +335,14 @@ export async function runScreeningCycle(deps: ScreeningCycleDeps): Promise<Scree
       // ALL lessons — selectPromptLessons keeps every pinned one plus the newest unpinned.
       // A `limit` here used to cut the oldest lessons before pinned-ness was considered.
       ctx.repos.lessons.listLessons(),
+      // Every closed trade — the evidence community backup lessons are judged against.
+      ctx.repos.lessons.recentPerformance(Number.MAX_SAFE_INTEGER),
     ]);
   // Condition-matched auto lessons go on the candidates they match, not in LESSONS.
   const { general: generalLessons, matched: matchedLessons } = splitMatchedLessons(lessons);
+  // Community lessons are a backup our own trades can overrule — see community-lessons.ts.
+  const community = selectCommunityLessons(lessons, ownHistory);
+  const communityMatched = community.usable.filter((v) => !!v.lesson.match);
 
   if (positionsSnap.total_positions >= ctx.config.risk.maxPositions) {
     // Name the follow feature when it is the reason the screener is boxed out.
@@ -440,11 +472,14 @@ export async function runScreeningCycle(deps: ScreeningCycleDeps): Promise<Scree
     recentDecisions,
     recentPerformance,
     lessons: generalLessons,
+    communityLessons: community.usable,
   });
   const promptLessons = selectPromptLessons(generalLessons);
   ctx.logger.info("screening", "lessons in prompt", {
     pinned: promptLessons.pinned.map((l) => l.id),
     recent: promptLessons.recent.map((l) => l.id),
+    community: community.usable.map((v) => `${v.lesson.id}:${v.status}`),
+    community_withheld: community.withheld.map((v) => `${v.lesson.id} (${v.own})`),
   });
 
   // Pre-fetch fresh diligence (rug + holder concentration) for the shortlist so
@@ -665,7 +700,7 @@ export async function runScreeningCycle(deps: ScreeningCycleDeps): Promise<Scree
     "SCREENING CYCLE — pick one of the following candidates and call deploy_position, or explain why none qualify.",
     "",
     "CANDIDATES (fresh diligence + prior history included — do NOT fetch more):",
-    formatCandidatesBlock(pickedFiltered, diligence, recentPerformance, clockNow, technicals, matchedLessons),
+    formatCandidatesBlock(pickedFiltered, diligence, recentPerformance, clockNow, technicals, matchedLessons, communityMatched),
     "",
     portfolioBlock,
     "",
@@ -822,13 +857,15 @@ export async function runScreeningCycle(deps: ScreeningCycleDeps): Promise<Scree
     // Telegram retrospective) pinned was invisible to Sage.
     const sageLessonsText = formatLessonsBlock(selectPromptLessons(generalLessons));
     const sageLessonsBlock = sageLessonsText ? `\n\n── LESSONS ──\n${sageLessonsText}` : "";
-    const sageSystemPromptWithLessons = sageSystemPrompt + sageLessonsBlock;
+    const sageCommunityText = formatCommunityBlock(community.usable);
+    const sageCommunityBlock = sageCommunityText ? `\n\n── COMMUNITY BACKUP ──\n${sageCommunityText}` : "";
+    const sageSystemPromptWithLessons = sageSystemPrompt + sageLessonsBlock + sageCommunityBlock;
 
     const sageGoal = [
       "SCREENING CYCLE — choose one candidate and call mrd_deploy_position, or NO DEPLOY.",
       "",
       "CANDIDATES (fresh diligence + prior history included — do NOT fetch more):",
-      formatCandidatesBlock(pickedFiltered, diligence, recentPerformance, clockNow, technicals, matchedLessons),
+      formatCandidatesBlock(pickedFiltered, diligence, recentPerformance, clockNow, technicals, matchedLessons, communityMatched),
       "",
       portfolioBlock,
       "",

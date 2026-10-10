@@ -13,6 +13,7 @@ import { deployPositionTool } from "../../src/app/tools/impls/deploy-position.js
 import type { CandidatePool } from "../../src/domain/schemas/market.js";
 import type { OnChainPosition } from "../../src/domain/schemas/chain.js";
 import type { KlineCandle } from "../../src/domain/schemas/kline.js";
+import type { Lesson } from "../../src/domain/schemas/lesson.js";
 import { createFakeKlineClient } from "../../src/adapters/market/fake-kline.js";
 import { makeCtx } from "./tool-context.js";
 
@@ -195,5 +196,55 @@ describe("runScreeningCycle", () => {
     // Decision log received deploy entry via post-hook
     const ds = await ctx.repos.decisions.recent(1);
     expect(ds[0]?.type).toBe("deploy");
+  });
+
+  describe("community backup lessons", () => {
+    const backupMatched: Lesson = {
+      id: "c-thin",
+      rule: "CAUTION thin pool",
+      tags: ["community"],
+      pinned: false,
+      sourceType: "community",
+      outcome: "loss",
+      match: "tvl < 20000 AND mcap < 1000000",
+    };
+    const backupGeneral: Lesson = {
+      id: "c-rug",
+      rule: "a stop cannot save a fast rug",
+      tags: ["community"],
+      pinned: false,
+      sourceType: "community",
+      outcome: "loss",
+    };
+
+    async function promptsFor(lessons: Lesson[]): Promise<{ system: string; goal: string }> {
+      const pools = createFakePoolDiscovery({ seed: [pool({ tvl: 15_000, active_tvl: 12_000 })] });
+      const chain = createDryRunChainClient({ clock: CLOCK, seed: { walletSol: 5 } });
+      const ctx = makeCtx({ chain, market: { pools } });
+      for (const l of lessons) await ctx.repos.lessons.addLesson(l);
+      const llm = createFakeLLM({ script: [{ kind: "assistant", text: "no deploy" }, { kind: "assistant", text: "no deploy" }] });
+      await runScreeningCycle({ ctx, llm, registry: REGISTRY, model: "test" });
+      const req = llm.requests()[0]!;
+      const text = (role: string) =>
+        req.messages.filter((m) => m.role === role).map((m) => String(m.content)).join("\n");
+      return { system: text("system"), goal: text("user") };
+    }
+
+    it("puts a matching community lesson on a candidate our own lessons do not cover", async () => {
+      const { system, goal } = await promptsFor([backupMatched, backupGeneral]);
+      expect(goal).toContain("tvl=$15000");
+      expect(goal).toMatch(/backup: +↳ \[c-thin\] CAUTION thin pool {2}\(our data: untested/);
+      expect(system).toContain("── COMMUNITY BACKUP ──");
+      expect(system).toContain("[c-rug]");
+      // Never in our own LESSONS block.
+      expect(system.split("── COMMUNITY BACKUP ──")[0]).not.toContain("c-rug");
+    });
+
+    it("stays silent where one of our own lessons holds for the candidate", async () => {
+      const ownLesson: Lesson = { id: "o-thin", rule: "own rule", tags: [], pinned: false, match: "tvl < 30000 AND mcap < 900000" };
+      const { goal } = await promptsFor([backupMatched, ownLesson]);
+      expect(goal).toContain("[o-thin]");
+      expect(goal).not.toContain("c-thin");
+    });
   });
 });

@@ -24,6 +24,8 @@ export const TrackedPositionSchema = z.object({
   initial_value_usd: z.number().nullable().optional(),
   /** Base-token market cap at deploy time (USD). */
   entry_mcap: z.number().nullable().optional(),
+  /** Pool TVL at deploy time (USD) — the `tvl` field of lesson MATCH conditions. */
+  entry_tvl: z.number().nullable().optional(),
   /** Base-token holder count at deploy time. */
   holders_at_entry: z.number().int().nonnegative().nullable().optional(),
   /** Whether at least one smart wallet was in the pool at deploy time. */

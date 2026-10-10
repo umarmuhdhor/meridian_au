@@ -26,6 +26,7 @@ export function trackDeployedPosition(): PostHook<
     fee_tvl_ratio?: number | undefined;
     organic_score?: number | undefined;
     mcap?: number | undefined;
+    tvl?: number | undefined;
     holders?: number | undefined;
     smart_wallets_present?: boolean | undefined;
     reason?: string | undefined;
@@ -91,6 +92,7 @@ export function trackDeployedPosition(): PostHook<
       organic_score: args.organic_score ?? null,
       initial_value_usd: initialValueUsd,
       entry_mcap: args.mcap ?? null,
+      entry_tvl: args.tvl ?? null,
       holders_at_entry: args.holders ?? null,
       smart_wallets_present: args.smart_wallets_present ?? null,
       entry_technicals: entryTechnicals,

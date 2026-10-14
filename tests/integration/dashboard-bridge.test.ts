@@ -28,6 +28,7 @@ const auth = { Authorization: `Bearer ${TOKEN}` };
 describe("dashboard bridge", () => {
   let handle: BridgeHandle | null = null;
   let stateDir: string;
+  let ctx: ReturnType<typeof makeCtx>;
 
   beforeAll(async () => {
     stateDir = await mkTmpDir("bridge");
@@ -41,7 +42,7 @@ describe("dashboard bridge", () => {
       JSON.stringify({ lessons: [{ id: "l1", rule: "x" }], performance: [] }),
       "utf8",
     );
-    const ctx = makeCtx();
+    ctx = makeCtx();
     const registry = createRegistry([getWalletBalanceTool, getMyPositionsTool, closePositionTool, addLessonTool]);
     const llm = createFakeLLM({ script: [], model: "demo/fake-v1" });
     handle = startBridge({
@@ -106,6 +107,26 @@ describe("dashboard bridge", () => {
     expect(typeof body.balance.sol).toBe("number");
     expect(typeof body.balance.total_usd).toBe("number");
     expect(Array.isArray(body.balance.tokens)).toBe(true);
+  });
+
+  it("GET /state/community-lessons returns each backup lesson with its verdict", async () => {
+    await ctx.repos.lessons.addLesson({
+      id: "c-test",
+      rule: "community caution",
+      tags: ["community"],
+      pinned: false,
+      sourceType: "community",
+      outcome: "loss",
+      match: "tvl < 20000 AND mcap < 1000000",
+      context: { evidence: "n=113" },
+    });
+    const r = await get("/state/community-lessons", auth);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { trades: number; lessons: Array<Record<string, unknown>> };
+    expect(body.trades).toBe(0);
+    expect(body.lessons).toEqual([
+      expect.objectContaining({ id: "c-test", status: "untested", evidence: "n=113", match: "tvl < 20000 AND mcap < 1000000" }),
+    ]);
   });
 
   it("GET /state/file/lessons returns the whitelisted file", async () => {

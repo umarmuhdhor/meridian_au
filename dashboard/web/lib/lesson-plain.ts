@@ -70,6 +70,7 @@ const POOL: Record<string, FieldSpec> = {
   volatility: { name: () => "volatilitas pool", low: () => "Pool tenang", high: () => "Pool bergerak liar" },
   organic: { name: () => "skor organik", low: () => "Skor organik rendah", high: () => "Skor organik tinggi" },
   mcap: { name: () => "market cap", fmt: fmtMcap, low: () => "Koin kecil", high: () => "Koin besar" },
+  tvl: { name: () => "TVL pool", fmt: fmtMcap, low: () => "Pool tipis", high: () => "Pool tebal" },
   holders: { name: () => "jumlah holder", low: () => "Holder sedikit", high: () => "Holder banyak" },
   bin_step: { name: () => "bin step" },
 };

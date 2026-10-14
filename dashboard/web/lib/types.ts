@@ -98,6 +98,28 @@ export interface SummaryResponse {
   balance: WalletBalance | null;
 }
 
+// ── Bridge: /state/community-lessons (src/domain/rules/community-lessons.ts) ──
+export interface CommunityLesson {
+  id: string;
+  rule: string;
+  match: string | null;
+  /** "loss" = a caution, "win" = a PREFER. */
+  outcome: string | null;
+  status: "untested" | "supported" | "contradicted";
+  /** What our own trades say — the same line the screener sees next to the lesson. */
+  own: string;
+  stats: { applied: number; wins: number; losses: number } | null;
+  /** The group evidence the lesson was distilled from. */
+  evidence: string | null;
+  created_at: string | null;
+}
+
+export interface CommunityLessonsResponse {
+  /** How many of our closed trades the verdicts were judged against. */
+  trades: number;
+  lessons: CommunityLesson[];
+}
+
 // ── Static file: lessons.json ───────────────────────────────────────
 export interface Lesson {
   id: number;

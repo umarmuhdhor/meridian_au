@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchJson } from "./api";
 import { LIVE_INTERVAL, FILE_INTERVAL } from "./query";
-import type { PositionsResponse, SummaryResponse } from "./types";
+import type { CommunityLessonsResponse, PositionsResponse, SummaryResponse } from "./types";
 
 // Query keys are the invalidation contract used by useToolMutation (M2).
 // Live keys: "positions", "summary". File keys: the file name (e.g. "lessons").
@@ -21,6 +21,15 @@ export function useSummary() {
     queryKey: ["summary"],
     queryFn: () => fetchJson<SummaryResponse>("/api/state/summary"),
     refetchInterval: LIVE_INTERVAL,
+  });
+}
+
+/** Community backup lessons + the verdict the screener applies (judged by the daemon). */
+export function useCommunityLessons() {
+  return useQuery({
+    queryKey: ["community-lessons"],
+    queryFn: () => fetchJson<CommunityLessonsResponse>("/api/state/community-lessons"),
+    refetchInterval: FILE_INTERVAL,
   });
 }
 

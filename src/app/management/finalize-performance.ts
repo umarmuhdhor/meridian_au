@@ -1,11 +1,62 @@
 import type { AppContext } from "../tools/context.js";
 import type { PerformanceRecord } from "../../domain/schemas/lesson.js";
 import { isPnlSettled, settledClosePnl } from "../../domain/format/close-pnl.js";
+import { perfContextFromTracked } from "../tools/post/record-performance.js";
 
 /** How far back unsettled records are retried — also the one-off backfill horizon. */
 export const FINALIZE_LOOKBACK_MS = 14 * 24 * 60 * 60_000;
 /** Records reconciled per call; bounds datapi traffic when the backlog is large. */
 export const FINALIZE_MAX_PER_TICK = 10;
+
+/** Note the reverse reconcile stamps on a tracked position that vanished on-chain. */
+export const RECONCILED_CLOSE_NOTE = "reconciled: no longer on-chain (external close or ghost record)";
+
+/**
+ * Give a History row to every position that closed outside a successful `close_position`
+ * (Meteora UI, a script, or a close tx reported expired that actually landed). Only
+ * `close_position`'s post-hook writes PerformanceRecords, so these closes used to vanish
+ * from History and the loss totals. The record starts as a zero estimate and is settled
+ * from Meteora by `finalizeClosedPerformance` in the same tick. Covers the whole lookback
+ * window, so older reconciled closes are backfilled too.
+ */
+export async function recordReconciledCloses(ctx: AppContext): Promise<number> {
+  const loaded = await ctx.repos.lessons.load();
+  if (!loaded.ok) return 0;
+  const recorded = new Set(loaded.value.performance.map((p) => p.position));
+  const cutoff = ctx.clock.now().getTime() - FINALIZE_LOOKBACK_MS;
+
+  let added = 0;
+  for (const t of await ctx.repos.positions.all()) {
+    if (!t.closed || !t.pool || recorded.has(t.position)) continue;
+    if (!(t.notes ?? []).includes(RECONCILED_CLOSE_NOTE)) continue;
+    const closedMs = Date.parse(String(t.closed_at));
+    if (!Number.isFinite(closedMs) || closedMs < cutoff) continue;
+    const deployedMs = Date.parse(String(t.deployed_at));
+    const perf: PerformanceRecord = {
+      position: t.position,
+      pool: t.pool,
+      pool_name: t.pool_name ?? null,
+      pnl_pct: 0,
+      pnl_usd: 0,
+      fees_earned_usd: 0,
+      ...(t.initial_value_usd != null ? { initial_value_usd: t.initial_value_usd } : {}),
+      pnl_source: "estimate",
+      ...(Number.isFinite(deployedMs)
+        ? { minutes_held: Math.max(0, Math.round((closedMs - deployedMs) / 60_000)) }
+        : {}),
+      close_reason: "closed outside close_position (reconciled from chain)",
+      ...(t.amount_sol != null ? { amount_sol: t.amount_sol } : {}),
+      ...perfContextFromTracked(t),
+      closed_at: t.closed_at!,
+      recorded_at: ctx.clock.now().toISOString(),
+    };
+    await ctx.repos.lessons.appendPerformance(perf);
+    recorded.add(t.position);
+    added++;
+    ctx.logger.info("perf", `recorded reconciled close ${t.position.slice(0, 8)} (settles from Meteora)`);
+  }
+  return added;
+}
 
 /**
  * Replace close-time PnL estimates with Meteora's settled closed-position totals.

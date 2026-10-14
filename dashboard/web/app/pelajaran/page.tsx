@@ -9,7 +9,8 @@ import {
   CaretDown,
   MagnifyingGlass,
 } from "@phosphor-icons/react";
-import { useFile } from "@/lib/hooks";
+import { useCommunityLessons, useFile } from "@/lib/hooks";
+import type { CommunityLesson } from "@/lib/types";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ConfirmModal } from "@/components/ConfirmModal";
@@ -84,7 +85,9 @@ interface Decision {
 
 // Same selection as src/domain/prompt/lessons.ts + screening/cycle.ts: pinned always, the newest 8
 // unpinned free-text lessons; unpinned MATCH lessons skip that window and are checked per candidate.
+// Unpinned community lessons never take a slot — they are a backup (domain/rules/community-lessons.ts).
 const RECENT_UNPINNED_IN_PROMPT = 8;
+const isCommunityBackup = (l: Lesson) => l.sourceType === "community" && !l.pinned;
 const REVIEW_LOOKBACK_MS = 24 * 3600_000;
 const PAGE = 20;
 const LESSONS_SHOWN = 5;
@@ -141,6 +144,7 @@ function PromptStatus({ lesson, inPrompt }: { lesson?: Lesson; inPrompt: Set<str
         <PushPin size={11} weight="fill" /> dipin — selalu dibaca AI
       </Badge>
     );
+  if (isCommunityBackup(lesson)) return <Badge tone="neutral">cadangan dari grup</Badge>;
   if (lesson.match) return <Badge tone="accent">aktif — dicek tiap koin</Badge>;
   if (inPrompt.has(String(lesson.id))) return <Badge tone="accent">sedang dibaca AI</Badge>;
   return <Badge tone="warning">sudah tergeser</Badge>;
@@ -196,6 +200,89 @@ function TechChips({ rows }: { rows?: TechLike[] | null }) {
   );
 }
 
+// ── Community backup lessons (judged by the daemon: /state/community-lessons) ──
+
+const COMMUNITY_STATUS: Record<CommunityLesson["status"], { tone: "neutral" | "profit" | "loss"; label: string; hint: string }> = {
+  untested: {
+    tone: "neutral",
+    label: "belum teruji",
+    hint: "Trade kita belum cukup untuk menilainya — tetap dipakai sebagai cadangan.",
+  },
+  supported: {
+    tone: "profit",
+    label: "didukung trade kita",
+    hint: "Trade kita menunjukkan hal yang sama — dipakai sebagai cadangan.",
+  },
+  contradicted: {
+    tone: "loss",
+    label: "dibantah trade kita",
+    hint: "Trade kita menunjukkan sebaliknya — tidak dikirim ke AI.",
+  },
+};
+
+function CommunityRow({ lesson: l }: { lesson: CommunityLesson }) {
+  const status = COMMUNITY_STATUS[l.status];
+  const plain = plainLesson(l.rule, l.match);
+  return (
+    <li className="flex flex-col gap-2 border-b border-border py-3 last:border-b-0">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge tone={status.tone}>{status.label}</Badge>
+        <span className={cn("text-[11px] font-semibold", l.outcome === "win" ? "text-profit" : "text-loss")}>
+          {l.outcome === "win" ? "ULANGI" : "WASPADA"}
+        </span>
+        <span className="font-mono text-[11px] text-text-tertiary">#{l.id}</span>
+      </div>
+      <p className="break-words text-[13px] text-text-secondary">{l.rule}</p>
+      {l.match && plain.conditions.length ? (
+        <div className="flex flex-col gap-1">
+          <span className="text-[12px] text-text-tertiary">Muncul hanya di koin yang memenuhi semua syarat ini:</span>
+          <ConditionList plain={plain} compact />
+        </div>
+      ) : (
+        <span className="text-[12px] text-text-tertiary">Dibaca AI di setiap screening (blok COMMUNITY BACKUP).</span>
+      )}
+      <p className="text-[12px] text-text-secondary">{status.hint}</p>
+      <p className="break-words font-mono text-[11px] text-text-tertiary">{l.own}</p>
+      <UsageLine stats={l.stats ?? undefined} />
+      {l.evidence ? (
+        <details className="text-[12px] text-text-tertiary">
+          <summary className="cursor-pointer select-none">Bukti dari grup</summary>
+          <p className="mt-1 break-words">{l.evidence}</p>
+        </details>
+      ) : null}
+    </li>
+  );
+}
+
+function CommunityBackup() {
+  const q = useCommunityLessons();
+  const rows = q.data?.lessons ?? [];
+  return (
+    <Section
+      title="Pelajaran cadangan dari grup Telegram"
+      hint={
+        "Pelajaran dari bot operator lain di grup Meridian. AI hanya memakainya kalau pelajaran kita sendiri tidak berlaku " +
+        "untuk koin itu, dan yang dibantah trade kita otomatis tidak dikirim ke AI." +
+        (q.data ? ` Dinilai terhadap ${q.data.trades} trade kita.` : "")
+      }
+    >
+      {q.isLoading ? (
+        <SkeletonRows rows={2} />
+      ) : q.isError ? (
+        <ErrorState message="Status tidak bisa dihitung — daemon tidak terjangkau." onRetry={() => q.refetch()} />
+      ) : rows.length ? (
+        <ul className="flex flex-col">
+          {rows.map((l) => (
+            <CommunityRow key={l.id} lesson={l} />
+          ))}
+        </ul>
+      ) : (
+        <EmptyState title="Belum ada pelajaran cadangan" hint="Diisi lewat src/entrypoints/import-community-lessons.ts." />
+      )}
+    </Section>
+  );
+}
+
 // ── Page ──
 
 type Filter = "all" | "win" | "loss" | "pending";
@@ -221,7 +308,7 @@ export default function PelajaranPage() {
   const plainById = useMemo(() => new Map(lessons.map((l) => [String(l.id), plainLesson(l.rule, l.match)])), [lessons]);
 
   const inPrompt = useMemo(() => {
-    const newestFirst = [...lessons].reverse();
+    const newestFirst = lessons.filter((l) => !isCommunityBackup(l)).reverse();
     const ids = new Set<string>();
     newestFirst.filter((l) => l.pinned).forEach((l) => ids.add(String(l.id)));
     newestFirst
@@ -483,6 +570,9 @@ export default function PelajaranPage() {
           <EmptyState title="Belum ada aturan yang dipakai" hint="Terisi setelah AI membuka posisi sambil menyebut aturan, lalu posisinya ditutup." />
         )}
       </Section>
+
+      {/* ── Community backup ── */}
+      <CommunityBackup />
 
       {/* ── Per-position story ── */}
       <Section title="Cerita per posisi" hint="Klik satu posisi untuk melihat alasan buka, kenapa ditutup, dan apa yang dipelajari. Terbaru di atas.">

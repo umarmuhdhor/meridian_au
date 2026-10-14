@@ -11,7 +11,11 @@ import type { KlineTimeframe, TechnicalsSummary } from "../../domain/schemas/kli
 import { computeTechnicals, formatTechnicalsLine } from "../../domain/format/technicals.js";
 import type { SageExitAdvisor } from "../../ports/sage-exit-advisor.js";
 import { partitionMirrorOwnership } from "../../domain/rules/follow-diff.js";
-import { finalizeClosedPerformance } from "./finalize-performance.js";
+import {
+  finalizeClosedPerformance,
+  recordReconciledCloses,
+  RECONCILED_CLOSE_NOTE,
+} from "./finalize-performance.js";
 import {
   armBounceWatch,
   evaluateBounceWatch,
@@ -315,7 +319,7 @@ export async function runManagementCycle(deps: ManagementCycleDeps): Promise<Man
       ...t,
       closed: true,
       closed_at: nowIsoR,
-      notes: [...(t.notes ?? []), "reconciled: no longer on-chain (external close or ghost record)"],
+      notes: [...(t.notes ?? []), RECONCILED_CLOSE_NOTE],
     });
     ctx.logger.info("management", `reconciled ghost-open position ${t.position.slice(0, 8)}… as closed`);
   }
@@ -323,6 +327,11 @@ export async function runManagementCycle(deps: ManagementCycleDeps): Promise<Man
   // Swap close-time PnL estimates for Meteora's settled totals. Before the
   // empty-snapshot return: the tick right after the last close is exactly when there
   // is something to settle and nothing left open.
+  await recordReconciledCloses(ctx).catch((err) =>
+    ctx.logger.warn("management", "recordReconciledCloses failed", {
+      error: err instanceof Error ? err.message : String(err),
+    }),
+  );
   await finalizeClosedPerformance(ctx).catch((err) =>
     ctx.logger.warn("management", "finalizeClosedPerformance failed", {
       error: err instanceof Error ? err.message : String(err),

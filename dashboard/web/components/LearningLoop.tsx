@@ -67,7 +67,8 @@ export function LearningLoop({
   performance?: LoopRecord[];
 }) {
   const inPrompt = useMemo(() => {
-    const newestFirst = [...lessons].reverse();
+    // Unpinned community lessons are a backup and never take one of these slots.
+    const newestFirst = lessons.filter((l) => !(l.sourceType === "community" && !l.pinned)).reverse();
     return {
       pinned: newestFirst.filter((l) => l.pinned),
       recent: newestFirst.filter((l) => !l.pinned).slice(0, RECENT_UNPINNED_IN_PROMPT),

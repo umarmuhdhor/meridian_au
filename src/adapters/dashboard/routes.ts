@@ -1,5 +1,5 @@
-// Bridge router: /health, /state/positions, /events, /state/summary, /state/file/:name,
-// POST /tool, POST /chat. Thin glue over the DI context — the daemon core is untouched.
+// Bridge router: /health, /state/positions, /events, /state/summary, /state/community-lessons,
+// /state/file/:name, POST /tool, POST /chat. Thin glue over the DI context — the daemon core is untouched.
 // Ported from dashboard/bridge/routes.js; the JS module singletons (executeTool, config,
 // agentLoop, getMyPositions, getStateSummary, getWalletBalances, log) become the injected
 // registry / ctx / llm. Response shapes preserved snake_case per the web contract.
@@ -11,6 +11,7 @@ import type { ChatMessage } from "../../ports/llm-client.js";
 import { executeTool, formatToolError } from "../../app/tools/execute.js";
 import { runAgentLoop } from "../../app/agent/loop.js";
 import { buildSystemPrompt } from "../../domain/prompt/builder.js";
+import { type CommunityVerdict, selectCommunityLessons } from "../../domain/rules/community-lessons.js";
 import type { BridgeDeps } from "./server.js";
 import type { SseHub } from "./sse.js";
 import { buildStateSummary } from "./state-summary.js";
@@ -300,6 +301,28 @@ export async function handleRequest(
       assembleWalletBalance(ctx.chain).catch(() => null),
     ]);
     return json(res, 200, { summary, balance });
+  }
+
+  // ── GET /state/community-lessons ─────────────────────────────
+  // Community backup lessons with the verdict the screener applies right now. Judged
+  // here by the same domain function so the web never re-implements the rules.
+  if (req.method === "GET" && p === "/state/community-lessons") {
+    const loaded = await ctx.repos.lessons.load();
+    if (!loaded.ok) return json(res, 500, { error: "cannot read lessons.json" });
+    const { lessons, performance } = loaded.value;
+    const { usable, withheld } = selectCommunityLessons(lessons, performance);
+    const row = (v: CommunityVerdict) => ({
+      id: v.lesson.id,
+      rule: v.lesson.rule,
+      match: v.lesson.match ?? null,
+      outcome: v.lesson.outcome ?? null,
+      status: v.status,
+      own: v.own,
+      stats: v.lesson.stats ?? null,
+      evidence: typeof v.lesson.context?.evidence === "string" ? v.lesson.context.evidence : null,
+      created_at: v.lesson.created_at ?? null,
+    });
+    return json(res, 200, { trades: performance.length, lessons: [...usable, ...withheld].map(row) });
   }
 
   // ── GET /state/file/:name (whitelist + redaction) ────────────

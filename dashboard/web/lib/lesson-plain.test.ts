@@ -14,6 +14,7 @@ describe("lesson-plain", () => {
     expect(plainCondition("15m.spike < 0").gist).toBe("Harga sedang koreksi (15 menit)");
     expect(plainCondition("1h.spike > 100").gist).toBe("Harga baru melonjak tajam (1 jam)");
     expect(plainCondition("mcap < 1000000").detail).toBe("market cap di bawah $1 jt");
+    expect(plainCondition("tvl < 20000")).toMatchObject({ gist: "Pool tipis", detail: "TVL pool di bawah $20 rb" });
     expect(plainCondition("15m.red_streak >= 3").detail).toBe("candle merah beruntun 15 menit minimal 3");
     expect(plainCondition("15m.from_high > -10").detail).toBe("sudah turun kurang dari 10% dari puncak 15 menit");
     expect(plainCondition("1h.from_high < -30").detail).toBe("sudah turun lebih dari 30% dari puncak 1 jam");

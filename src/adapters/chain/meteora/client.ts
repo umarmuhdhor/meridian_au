@@ -17,6 +17,7 @@ import type {
 } from "../../../domain/schemas/chain.js";
 import { createTtlCache } from "../../../shared/cache.js";
 import { assessPnl, roundNum } from "../../../domain/rules/pnl.js";
+import { sendRecoveringExpiry } from "./send-tx.js";
 
 const JUPITER_PRICE_BASE_URL = "https://lite-api.jup.ag/price/v3";
 
@@ -170,11 +171,23 @@ export function createMeteoraChainClient(opts: MeteoraChainClientOptions): Chain
     (await import("@meteora-ag/dlmm")) as unknown as import("./write-paths.js").SdkNamespace;
   const defaultSendTx: SendTx = async (tx, signers) => {
     const web3 = await import("@solana/web3.js");
-    return web3.sendAndConfirmTransaction(
-      connection.raw as InstanceType<typeof web3.Connection>,
-      tx as InstanceType<typeof web3.Transaction>,
-      signers as InstanceType<typeof web3.Keypair>[],
-      { commitment: "confirmed" },
+    const conn = connection.raw as InstanceType<typeof web3.Connection>;
+    return sendRecoveringExpiry(
+      () =>
+        web3.sendAndConfirmTransaction(
+          conn,
+          tx as InstanceType<typeof web3.Transaction>,
+          signers as InstanceType<typeof web3.Keypair>[],
+          { commitment: "confirmed" },
+        ),
+      async (sig) =>
+        (await conn.getSignatureStatuses([sig], { searchTransactionHistory: true })).value[0] ?? null,
+      {
+        onRecovered: (sig) =>
+          logger.warn("meteora-write", "tx reported expired but landed — treating as success", {
+            signature: sig,
+          }),
+      },
     );
   };
   const defaultNewPositionKeypair: NewPositionKeypair = async () => {

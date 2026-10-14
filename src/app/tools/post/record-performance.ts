@@ -1,6 +1,7 @@
 import type { PostHook } from "../types.js";
 import type { CloseResult } from "../../../domain/schemas/chain.js";
 import type { PerformanceRecord } from "../../../domain/schemas/lesson.js";
+import type { TrackedPosition } from "../../../domain/schemas/position.js";
 import type { KlineTimeframe, TechnicalsSummary } from "../../../domain/schemas/kline.js";
 import { computeTechnicals } from "../../../domain/format/technicals.js";
 import { estimateClosePnl } from "../../../domain/format/close-pnl.js";
@@ -8,6 +9,34 @@ import { estimateClosePnl } from "../../../domain/format/close-pnl.js";
 const EXIT_TECHNICALS_TIMEFRAMES: readonly KlineTimeframe[] = ["15m", "1h"] as const;
 const EXIT_TECHNICALS_LIMIT = 100;
 const EXIT_TECHNICALS_TIMEOUT_MS = 3_500;
+
+/**
+ * Entry-side context copied from the TrackedPosition so a History row renders
+ * standalone (state.json prunes closed positions on cleanup). Shared with the
+ * management cycle's record for positions that closed outside `close_position`.
+ */
+export function perfContextFromTracked(tracked: TrackedPosition | null | undefined): Partial<PerformanceRecord> {
+  if (!tracked) return {};
+  const binRange =
+    tracked.bin_range?.lower_bin != null && tracked.bin_range?.upper_bin != null
+      ? { min: tracked.bin_range.lower_bin, max: tracked.bin_range.upper_bin }
+      : undefined;
+  return {
+    ...(tracked.strategy ? { strategy: tracked.strategy } : {}),
+    ...(binRange ? { bin_range: binRange } : {}),
+    ...(tracked.bin_step != null ? { bin_step: tracked.bin_step } : {}),
+    ...(tracked.volatility != null ? { volatility: tracked.volatility } : {}),
+    ...(tracked.fee_tvl_ratio != null ? { fee_tvl_ratio: tracked.fee_tvl_ratio } : {}),
+    ...(tracked.organic_score != null ? { organic_score: tracked.organic_score } : {}),
+    ...(tracked.entry_mcap != null ? { entry_mcap: tracked.entry_mcap } : {}),
+    ...(tracked.entry_tvl != null ? { entry_tvl: tracked.entry_tvl } : {}),
+    ...(tracked.entry_technicals ? { entry_technicals: tracked.entry_technicals } : {}),
+    ...(tracked.entry_reason ? { entry_reason: tracked.entry_reason } : {}),
+    ...(tracked.lessons_applied?.length ? { lessons_applied: tracked.lessons_applied } : {}),
+    ...(tracked.holders_at_entry != null ? { holders_at_entry: tracked.holders_at_entry } : {}),
+    ...(tracked.smart_wallets_present != null ? { smart_wallets_present: tracked.smart_wallets_present } : {}),
+  };
+}
 
 /**
  * Append a PerformanceRecord to lessons.json after a successful close.
@@ -98,11 +127,6 @@ export const recordPerformanceHook: PostHook<
     }
   }
 
-  const binRange =
-    tracked?.bin_range?.lower_bin != null && tracked?.bin_range?.upper_bin != null
-      ? { min: tracked.bin_range.lower_bin, max: tracked.bin_range.upper_bin }
-      : undefined;
-
   const perf: PerformanceRecord = {
     position: args.position_address,
     pool: result.pool_address,
@@ -116,25 +140,10 @@ export const recordPerformanceHook: PostHook<
     ...(minutesHeld !== undefined ? { minutes_held: minutesHeld } : {}),
     close_reason: args.reason,
     ...(amountSol != null ? { amount_sol: amountSol } : {}),
-    // ── copied from TrackedPosition so the row renders standalone ──
-    ...(tracked?.strategy ? { strategy: tracked.strategy } : {}),
-    ...(binRange ? { bin_range: binRange } : {}),
-    ...(tracked?.bin_step != null ? { bin_step: tracked.bin_step } : {}),
-    ...(tracked?.volatility != null ? { volatility: tracked.volatility } : {}),
-    ...(tracked?.fee_tvl_ratio != null ? { fee_tvl_ratio: tracked.fee_tvl_ratio } : {}),
-    ...(tracked?.organic_score != null ? { organic_score: tracked.organic_score } : {}),
-    ...(tracked?.entry_mcap != null ? { entry_mcap: tracked.entry_mcap } : {}),
-    ...(tracked?.entry_tvl != null ? { entry_tvl: tracked.entry_tvl } : {}),
+    ...perfContextFromTracked(tracked),
     ...(exitMcap != null ? { exit_mcap: exitMcap } : {}),
     ...(baseMint ? { base_mint: baseMint } : {}),
-    ...(tracked?.entry_technicals ? { entry_technicals: tracked.entry_technicals } : {}),
     ...(exitTechnicals ? { exit_technicals: exitTechnicals } : {}),
-    ...(tracked?.entry_reason ? { entry_reason: tracked.entry_reason } : {}),
-    ...(tracked?.lessons_applied?.length ? { lessons_applied: tracked.lessons_applied } : {}),
-    ...(tracked?.holders_at_entry != null ? { holders_at_entry: tracked.holders_at_entry } : {}),
-    ...(tracked?.smart_wallets_present != null
-      ? { smart_wallets_present: tracked.smart_wallets_present }
-      : {}),
     closed_at: now.toISOString(),
     recorded_at: now.toISOString(),
   };
